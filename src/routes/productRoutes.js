@@ -44,10 +44,10 @@ router.put(
   productController.updateProduct
 );
 
-// 6. Restock existing product (SRS 3.2)
+// 6. Restock existing product (SRS 3.2 - Includes Customer Returns by Sellers)
 router.post(
   '/:id/restock',
-  authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]),
+  authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.SELLER]),
   productController.restockProduct
 );
 

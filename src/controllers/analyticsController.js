@@ -172,8 +172,71 @@ export async function getReportRange(req, res, next) {
   }
 }
 
+/**
+ * Retrieve top-selling products by quantity and revenue (SRS 3.4 / POS Seller Insights)
+ * Accessible to Sellers, Admins, and Super Admins.
+ */
+export async function getTopSellingProducts(req, res, next) {
+  try {
+    const shopId = req.targetShopId;
+    const limit = parseInt(req.query.limit, 10) || 5;
+
+    let sql = `
+      SELECT 
+        ti.product_id,
+        p.name,
+        p.category,
+        p.price,
+        p.stock_quantity,
+        s.name AS shop_name,
+        COALESCE(SUM(ti.quantity), 0) AS total_units_sold,
+        COALESCE(SUM(ti.subtotal), 0) AS total_revenue
+      FROM transaction_items ti
+      JOIN products p ON ti.product_id = p.id
+      JOIN transactions t ON ti.transaction_id = t.id
+      JOIN shops s ON p.shop_id = s.id
+      WHERE t.status = 'completed'
+    `;
+    const params = [];
+
+    if (shopId) {
+      sql += ' AND t.shop_id = ?';
+      params.push(shopId);
+    }
+
+    sql += `
+      GROUP BY ti.product_id, p.name, p.category, p.price, p.stock_quantity, s.name
+      ORDER BY total_units_sold DESC, total_revenue DESC
+      LIMIT ?
+    `;
+    params.push(limit);
+
+    const topProducts = await query(sql, params);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        shop_id: shopId || null,
+        top_products: topProducts.map((p) => ({
+          product_id: p.product_id,
+          name: p.name,
+          category: p.category,
+          price: parseFloat(p.price),
+          stock_quantity: parseInt(p.stock_quantity, 10),
+          shop_name: p.shop_name,
+          total_units_sold: parseInt(p.total_units_sold, 10),
+          total_revenue: parseFloat(p.total_revenue)
+        }))
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export default {
   getDailyReport,
   triggerDailyClose,
-  getReportRange
+  getReportRange,
+  getTopSellingProducts
 };

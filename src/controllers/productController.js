@@ -172,7 +172,7 @@ export async function restockProduct(req, res, next) {
   try {
     const { id } = req.params;
     const shopId = req.targetShopId;
-    const { quantity, reason } = req.body;
+    const { quantity, reason, change_type } = req.body;
 
     const restockQty = parseInt(quantity, 10);
     if (!restockQty || restockQty <= 0) {
@@ -181,6 +181,10 @@ export async function restockProduct(req, res, next) {
         message: 'A valid positive restock quantity is required.'
       });
     }
+
+    const isReturn = change_type === 'return' || (reason && reason.toLowerCase().includes('return'));
+    const inventoryChangeType = isReturn ? INVENTORY_CHANGE_TYPES.RETURN : INVENTORY_CHANGE_TYPES.RESTOCK;
+    const logReason = reason || (isReturn ? 'Customer product return' : 'Stock replenishment');
 
     const result = await executeTransaction(async (conn) => {
       // Lock product row
@@ -209,11 +213,11 @@ export async function restockProduct(req, res, next) {
         [newStock, id]
       );
 
-      // Log inventory change
+      // Log inventory change with correct change_type (RESTOCK or RETURN)
       await conn.execute(
         `INSERT INTO inventory_logs (shop_id, product_id, user_id, change_type, quantity_change, previous_stock, new_stock, reason)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [product.shop_id, id, req.user.id, INVENTORY_CHANGE_TYPES.RESTOCK, restockQty, previousStock, newStock, reason || 'Stock replenishment']
+        [product.shop_id, id, req.user.id, inventoryChangeType, restockQty, previousStock, newStock, logReason]
       );
 
       return {
@@ -221,7 +225,8 @@ export async function restockProduct(req, res, next) {
         name: product.name,
         previous_stock: previousStock,
         restocked_quantity: restockQty,
-        new_stock: newStock
+        new_stock: newStock,
+        change_type: inventoryChangeType
       };
     });
 

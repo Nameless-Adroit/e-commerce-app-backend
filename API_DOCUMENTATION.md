@@ -275,15 +275,16 @@ Used during scanning in POS or inventory audit.
 
 ---
 
-### 3.6 Restock Product Inventory
-Increments existing product stock and records an audit trail in `inventory_logs` (SRS 3.2).
+### 3.6 Restock Product Inventory & Customer Returns
+Increments existing product stock and records an audit trail in `inventory_logs` (SRS 3.2). Supports supplier restocks and customer returned items.
 - **Endpoint:** `POST /api/products/:id/restock`
-- **Access:** `admin`, `super_admin`
+- **Access:** `admin`, `seller`, `super_admin`
 - **Request Body:**
 ```json
 {
-  "quantity": 15,
-  "reason": "Supplier shipment received"
+  "quantity": 2,
+  "reason": "[RETURN] Customer returned unopened item",
+  "change_type": "return" // Optional: 'restock' (default) or 'return'
 }
 ```
 - **Success Response (200 OK):**
@@ -534,6 +535,34 @@ Compiles total units sold, revenue, net profit, and shrinkage for the day.
 ### 5.3 Historical Date Range Report
 - **Endpoint:** `GET /api/analytics/range?start_date=2026-09-01&end_date=2026-09-13`
 - **Access:** `admin`, `super_admin`
+
+---
+
+### 5.4 Top-Selling Products (Ranked Sales & Performance)
+Retrieves the best-selling products ranked by total volume of units sold, along with revenue generated and current stock.
+- **Endpoint:** `GET /api/analytics/top-products?limit=5`
+- **Access:** `seller`, `admin`, `super_admin`
+- **Query Parameters:** `limit` (optional integer, default `10`)
+- **Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "top_products": [
+      {
+        "product_id": "PRD-SHP01-3BSR-CHG4",
+        "name": "Magnetic Power Bank 10000mAh",
+        "category": "Accessories",
+        "price": 49.99,
+        "stock_quantity": 28,
+        "shop_name": "Downtown Tech & Gadgets",
+        "total_units_sold": 42,
+        "total_revenue": 2099.58
+      }
+    ]
+  }
+}
+```
 
 ---
 

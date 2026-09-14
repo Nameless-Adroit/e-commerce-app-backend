@@ -30,4 +30,11 @@ router.get(
   analyticsController.getReportRange
 );
 
+// 4. Get top-selling / most sold products (Accessible to Sellers, Admins, and Super Admins)
+router.get(
+  '/top-products',
+  authorize([ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SELLER]),
+  analyticsController.getTopSellingProducts
+);
+
 export default router;
