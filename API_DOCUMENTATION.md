@@ -39,10 +39,10 @@ Authenticates users and returns the JWT token along with the role-specific redir
 
 - **Endpoint:** `POST /api/auth/login`
 - **Access:** Public
-- **Request Body:**
+- **Request Body:** *(identifier can be either username or email)*
 ```json
 {
-  "identifier": "admin_tech", // Can be username or email
+  "identifier": "admin_tech",
   "password": "Admin123!"
 }
 ```
@@ -101,14 +101,14 @@ Authenticates users and returns the JWT token along with the role-specific redir
 ### 2.3 Register New User
 - **Endpoint:** `POST /api/auth/users`
 - **Access:** `super_admin` (can create all roles) or `admin` (can create sellers for assigned shop)
-- **Request Body:**
+- **Request Body:** *(shop_id is optional for Admins as it is auto-inferred from their shop)*
 ```json
 {
   "username": "seller_david",
   "email": "david@downtown.com",
   "password": "SellerPassword123!",
   "role": "seller",
-  "shop_id": 1, // Optional for Admins (auto-inferred from their shop)
+  "shop_id": 1,
   "full_name": "David Miller"
 }
 ```
@@ -195,10 +195,10 @@ Lists inventory with search, pagination, and stock filters. Scoped automatically
 ### 3.3 Create Product with Generated ID
 - **Endpoint:** `POST /api/products`
 - **Access:** `admin`, `super_admin`
-- **Request Body:**
+- **Request Body:** *(id is optional; if omitted, the server automatically generates a unique alphanumeric ID)*
 ```json
 {
-  "id": "PRD-SHP01-3BSR-7RUR", // Optional: If omitted, server generates a unique ID automatically
+  "id": "PRD-SHP01-3BSR-7RUR",
   "name": "Magnetic Power Bank 10000mAh",
   "description": "Wireless fast-charging portable battery pack",
   "category": "Accessories",
@@ -279,12 +279,12 @@ Used during scanning in POS or inventory audit.
 Increments existing product stock and records an audit trail in `inventory_logs` (SRS 3.2). Supports supplier restocks and customer returned items.
 - **Endpoint:** `POST /api/products/:id/restock`
 - **Access:** `admin`, `seller`, `super_admin`
-- **Request Body:**
+- **Request Body:** *(change_type is optional: `'restock'` [default] or `'return'`)*
 ```json
 {
   "quantity": 2,
   "reason": "[RETURN] Customer returned unopened item",
-  "change_type": "return" // Optional: 'restock' (default) or 'return'
+  "change_type": "return"
 }
 ```
 - **Success Response (200 OK):**
@@ -360,7 +360,7 @@ Seller scans or types the product ID to verify in-stock availability and price b
 Executes an atomic checkout. Checks and locks product rows, inserts the transaction and line items, decrements the product stock counts, and writes sales logs (SRS 3.3).
 - **Endpoint:** `POST /api/pos/checkout`
 - **Access:** `seller`, `admin`, `super_admin`
-- **Request Body:**
+- **Request Body:** *(payment_method can be `"cash"`, `"card"`, or `"mobile_money"`)*
 ```json
 {
   "items": [
@@ -373,7 +373,7 @@ Executes an atomic checkout. Checks and locks product rows, inserts the transact
       "quantity": 1
     }
   ],
-  "payment_method": "card", // "cash" | "card" | "mobile_money"
+  "payment_method": "card",
   "notes": "Counter checkout"
 }
 ```
@@ -513,7 +513,22 @@ Compiles total units sold, revenue, net profit, and shrinkage for the day.
       "total_shrinkage_count": 3,
       "total_shrinkage_cost": 78.50
     },
-    "shop_breakdown": [ ... ]
+    "shop_breakdown": [
+      {
+        "shop_id": 1,
+        "shop_name": "Downtown Tech & Gadgets",
+        "total_transactions": 2,
+        "total_revenue": 214.98,
+        "net_profit": 112.48
+      },
+      {
+        "shop_id": 2,
+        "shop_name": "Metro Fashion & Apparel",
+        "total_transactions": 1,
+        "total_revenue": 189.96,
+        "net_profit": 99.96
+      }
+    ]
   }
 }
 ```

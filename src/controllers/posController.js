@@ -190,6 +190,7 @@ export async function checkout(req, res, next) {
         items: verifiedLineItems.map(i => ({
           product_id: i.productId,
           name: i.name,
+          product_name: i.name,
           quantity: i.requestedQty,
           unit_price: i.unitPrice,
           subtotal: i.subtotal,
@@ -294,7 +295,7 @@ export async function getTransactionById(req, res, next) {
     const transaction = transactions[0];
 
     const items = await query(
-      `SELECT ti.*, p.name as product_name, p.category
+      `SELECT ti.*, p.name, p.name as product_name, p.category
        FROM transaction_items ti
        JOIN products p ON ti.product_id = p.id
        WHERE ti.transaction_id = ?`,
