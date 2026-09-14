@@ -10,12 +10,23 @@ import { query, executeTransaction } from '../config/database.js';
 export async function compileDailyReportForShop(shopId, dateString) {
   const targetDate = dateString || new Date().toISOString().slice(0, 10);
 
-  // 1. Calculate sales aggregates from transactions and transaction_items
-  const salesSql = `
+  // 1. Calculate transactions and actual cash revenue collected (net after checkout discounts)
+  const txnSql = `
     SELECT 
-      COUNT(DISTINCT t.id) AS total_transactions,
+      COUNT(id) AS total_transactions,
+      COALESCE(SUM(total_amount), 0) AS revenue_generated
+    FROM transactions
+    WHERE shop_id = ? 
+      AND status = 'completed'
+      AND DATE(transaction_date) = ?
+  `;
+  const txnResult = await query(txnSql, [shopId, targetDate]);
+  const txnData = txnResult[0] || { total_transactions: 0, revenue_generated: 0 };
+
+  // 2. Calculate units sold and wholesale cost of goods sold (COGS)
+  const itemsSql = `
+    SELECT 
       COALESCE(SUM(ti.quantity), 0) AS total_units_sold,
-      COALESCE(SUM(ti.subtotal), 0) AS revenue_generated,
       COALESCE(SUM(ti.quantity * p.cost_price), 0) AS total_cost
     FROM transactions t
     JOIN transaction_items ti ON t.id = ti.transaction_id
@@ -24,17 +35,12 @@ export async function compileDailyReportForShop(shopId, dateString) {
       AND t.status = 'completed'
       AND DATE(t.transaction_date) = ?
   `;
-  const salesResult = await query(salesSql, [shopId, targetDate]);
-  const salesData = salesResult[0] || {
-    total_transactions: 0,
-    total_units_sold: 0,
-    revenue_generated: 0,
-    total_cost: 0
-  };
+  const itemsResult = await query(itemsSql, [shopId, targetDate]);
+  const itemsData = itemsResult[0] || { total_units_sold: 0, total_cost: 0 };
 
-  const revenue = parseFloat(salesData.revenue_generated) || 0;
-  const cost = parseFloat(salesData.total_cost) || 0;
-  const netProfit = revenue - cost;
+  const revenue = parseFloat(Number(txnData.revenue_generated).toFixed(2)) || 0;
+  const cost = parseFloat(Number(itemsData.total_cost).toFixed(2)) || 0;
+  const netProfit = parseFloat((revenue - cost).toFixed(2));
 
   // 2. Calculate inventory shrinkage from inventory_logs
   // Shrinkage adjustment logs record missing or damaged units as negative quantity_change
@@ -72,8 +78,8 @@ export async function compileDailyReportForShop(shopId, dateString) {
   await query(upsertSql, [
     shopId,
     targetDate,
-    salesData.total_transactions,
-    salesData.total_units_sold,
+    txnData.total_transactions,
+    itemsData.total_units_sold,
     revenue,
     cost,
     netProfit,
@@ -84,8 +90,8 @@ export async function compileDailyReportForShop(shopId, dateString) {
   return {
     shop_id: shopId,
     report_date: targetDate,
-    total_transactions: Number(salesData.total_transactions),
-    total_units_sold: Number(salesData.total_units_sold),
+    total_transactions: Number(txnData.total_transactions),
+    total_units_sold: Number(itemsData.total_units_sold),
     revenue_generated: revenue,
     total_cost: cost,
     net_profit: netProfit,

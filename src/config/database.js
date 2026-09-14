@@ -52,6 +52,29 @@ export async function testConnection() {
   try {
     const connection = await pool.getConnection();
     console.log(`✅ Connected successfully to MySQL Database (${process.env.DB_NAME || 'pos_ecommerce_db'})`);
+
+    // Ensure discount columns exist on transactions table
+    try {
+      const [cols] = await connection.query(`
+        SELECT COLUMN_NAME 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'transactions' AND COLUMN_NAME IN ('subtotal_amount', 'discount_amount')
+      `, [process.env.DB_NAME || 'pos_ecommerce_db']);
+
+      const colNames = cols.map(c => c.COLUMN_NAME.toLowerCase());
+      if (!colNames.includes('subtotal_amount')) {
+        await connection.query('ALTER TABLE transactions ADD COLUMN subtotal_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00 AFTER seller_id');
+        console.log('✅ Added subtotal_amount column to transactions table');
+      }
+      if (!colNames.includes('discount_amount')) {
+        await connection.query('ALTER TABLE transactions ADD COLUMN discount_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00 AFTER subtotal_amount');
+        console.log('✅ Added discount_amount column to transactions table');
+      }
+    } catch (migrationErr) {
+      // Table may not exist yet if database hasn't been initialized
+      console.warn('Schema check notice:', migrationErr.message);
+    }
+
     connection.release();
     return true;
   } catch (err) {

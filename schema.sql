@@ -84,6 +84,8 @@ CREATE TABLE `transactions` (
   `id` VARCHAR(50) PRIMARY KEY COMMENT 'Unique Transaction Code (e.g. TXN-SHP01-20260913-9F3K)',
   `shop_id` INT NOT NULL,
   `seller_id` INT NOT NULL,
+  `subtotal_amount` DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  `discount_amount` DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
   `total_amount` DECIMAL(10, 2) NOT NULL,
   `payment_method` ENUM('cash', 'card', 'mobile_money') NOT NULL DEFAULT 'cash',
   `status` ENUM('completed', 'refunded', 'cancelled') NOT NULL DEFAULT 'completed',

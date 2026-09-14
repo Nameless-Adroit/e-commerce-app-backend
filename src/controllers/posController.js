@@ -14,7 +14,7 @@ export async function scanProduct(req, res, next) {
     const cleanId = id.trim().toUpperCase();
 
     let sql = `
-      SELECT id, shop_id, name, category, price, stock_quantity, reorder_level
+      SELECT id, shop_id, name, description, category, price, stock_quantity, reorder_level
       FROM products
       WHERE id = ?
     `;
@@ -41,6 +41,7 @@ export async function scanProduct(req, res, next) {
       data: {
         id: product.id,
         name: product.name,
+        description: product.description || '',
         category: product.category,
         price: parseFloat(product.price),
         stock_quantity: product.stock_quantity,
@@ -61,7 +62,7 @@ export async function checkout(req, res, next) {
   try {
     const shopId = req.targetShopId;
     const sellerId = req.user.id;
-    const { items, payment_method = PAYMENT_METHODS.CASH, notes } = req.body;
+    const { items, payment_method = PAYMENT_METHODS.CASH, notes, discount = 0 } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
@@ -78,7 +79,7 @@ export async function checkout(req, res, next) {
 
     // Run ACID transaction
     const checkoutResult = await executeTransaction(async (conn) => {
-      let totalAmount = 0;
+      let totalSubtotal = 0;
       const verifiedLineItems = [];
 
       for (const item of items) {
@@ -119,7 +120,7 @@ export async function checkout(req, res, next) {
 
         const unitPrice = parseFloat(product.price);
         const subtotal = unitPrice * requestedQty;
-        totalAmount += subtotal;
+        totalSubtotal += subtotal;
 
         verifiedLineItems.push({
           productId: product.id,
@@ -132,14 +133,21 @@ export async function checkout(req, res, next) {
         });
       }
 
-      // 1. Insert master transaction record
+      // Compute discount and final net total
+      const parsedDiscount = Math.max(0, parseFloat(discount) || 0);
+      const discountAmount = Math.min(totalSubtotal, parseFloat(parsedDiscount.toFixed(2)));
+      const totalAmount = Math.max(0, parseFloat((totalSubtotal - discountAmount).toFixed(2)));
+
+      // 1. Insert master transaction record (with subtotal and discount tracking)
       await conn.execute(
-        `INSERT INTO transactions (id, shop_id, seller_id, total_amount, payment_method, status, notes, transaction_date)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+        `INSERT INTO transactions (id, shop_id, seller_id, subtotal_amount, discount_amount, total_amount, payment_method, status, notes, transaction_date)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
         [
           transactionId,
           shopId,
           sellerId,
+          totalSubtotal,
+          discountAmount,
           totalAmount,
           payment_method,
           TRANSACTION_STATUS.COMPLETED,
@@ -183,6 +191,8 @@ export async function checkout(req, res, next) {
         transaction_id: transactionId,
         shop_id: shopId,
         seller_id: sellerId,
+        subtotal_amount: totalSubtotal,
+        discount_amount: discountAmount,
         total_amount: totalAmount,
         payment_method,
         status: TRANSACTION_STATUS.COMPLETED,
