@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-import { query } from '../config/database.js';
+import { query } from '../config/database.config.js';
 import { ROLES } from '../config/constants.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key_pos_ecommerce_2026';

@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { ID_CONFIG } from '../config/constants.js';
-import { query } from '../config/database.js';
+import { query } from '../config/database.config.js';
 
 // Clean unambiguous alphanumeric character set (Crockford base32 variation: 30 chars, excludes 0, O, 1, I, L)
 export const CHARSET = process.env.ID_CHARSET || ID_CONFIG.CHARSET;

@@ -4,12 +4,8 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 
-import authRoutes from './routes/authRoutes.js';
-import productRoutes from './routes/productRoutes.js';
-import posRoutes from './routes/posRoutes.js';
-import analyticsRoutes from './routes/analyticsRoutes.js';
-import shopRoutes from './routes/shopRoutes.js';
-import errorHandler from './middleware/errorHandler.js';
+import apiRoutes from './routes/index.route.js';
+import errorHandler from './middleware/error.middleware.js';
 
 dotenv.config();
 
@@ -62,11 +58,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/products', productRoutes);
-app.use('/api/pos', posRoutes);
-app.use('/api/analytics', analyticsRoutes);
-app.use('/api/shops', shopRoutes);
+app.use('/api', apiRoutes);
 
 // Catch 404
 app.use((req, res) => {

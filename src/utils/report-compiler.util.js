@@ -1,4 +1,4 @@
-import { query, executeTransaction } from '../config/database.js';
+import { query } from '../config/database.config.js';
 
 /**
  * Compiles end-of-day sales, revenue, profit, and inventory shrinkage for a specific shop on a given date.

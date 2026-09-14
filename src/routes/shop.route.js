@@ -1,6 +1,6 @@
 import express from 'express';
-import * as shopController from '../controllers/shopController.js';
-import { authenticateToken, authorize } from '../middleware/auth.js';
+import * as shopController from '../controllers/shop.controller.js';
+import { authenticateToken, authorize } from '../middleware/auth.middleware.js';
 import { ROLES } from '../config/constants.js';
 
 const router = express.Router();

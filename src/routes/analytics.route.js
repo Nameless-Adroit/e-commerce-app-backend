@@ -1,6 +1,6 @@
 import express from 'express';
-import * as analyticsController from '../controllers/analyticsController.js';
-import { authenticateToken, authorize, enforceShopScope } from '../middleware/auth.js';
+import * as analyticsController from '../controllers/analytics.controller.js';
+import { authenticateToken, authorize, enforceShopScope } from '../middleware/auth.middleware.js';
 import { ROLES } from '../config/constants.js';
 
 const router = express.Router();
