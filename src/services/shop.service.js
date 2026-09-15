@@ -22,7 +22,7 @@ export async function getAllShops() {
 /**
  * Create a new shop (Super Admin)
  */
-export async function createShop({ shop_code, name, address, phone }) {
+export async function createShop({ shop_code, name, address, phone, currency_code = 'TZS', currency_symbol = 'TSh', currency_name = 'Tanzanian Shilling' }) {
   if (!shop_code || !name) {
     const err = new Error('Shop code (e.g. SHP01) and business name are required.');
     err.statusCode = 400;
@@ -38,9 +38,13 @@ export async function createShop({ shop_code, name, address, phone }) {
     throw err;
   }
 
+  const cleanCurrencyCode = (currency_code || 'TZS').trim().toUpperCase();
+  const cleanCurrencySymbol = (currency_symbol || 'TSh').trim();
+  const cleanCurrencyName = (currency_name || 'Tanzanian Shilling').trim();
+
   const result = await query(
-    `INSERT INTO shops (shop_code, name, address, phone) VALUES (?, ?, ?, ?)`,
-    [cleanCode, name, address || null, phone || null]
+    `INSERT INTO shops (shop_code, name, address, phone, currency_code, currency_symbol, currency_name) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [cleanCode, name, address || null, phone || null, cleanCurrencyCode, cleanCurrencySymbol, cleanCurrencyName]
   );
 
   return {
@@ -48,7 +52,10 @@ export async function createShop({ shop_code, name, address, phone }) {
     shop_code: cleanCode,
     name,
     address,
-    phone
+    phone,
+    currency_code: cleanCurrencyCode,
+    currency_symbol: cleanCurrencySymbol,
+    currency_name: cleanCurrencyName
   };
 }
 

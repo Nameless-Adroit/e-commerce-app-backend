@@ -32,6 +32,9 @@ CREATE TABLE `shops` (
   `name` VARCHAR(150) NOT NULL COMMENT 'Business or Shop Display Name',
   `address` VARCHAR(255) NULL,
   `phone` VARCHAR(50) NULL,
+  `currency_code` VARCHAR(10) NOT NULL DEFAULT 'TZS' COMMENT 'Base currency ISO code (e.g. TZS, USD, KES)',
+  `currency_symbol` VARCHAR(10) NOT NULL DEFAULT 'TSh' COMMENT 'Currency display prefix (e.g. TSh, $, KSh)',
+  `currency_name` VARCHAR(50) NOT NULL DEFAULT 'Tanzanian Shilling' COMMENT 'Full currency name',
   `is_active` BOOLEAN NOT NULL DEFAULT TRUE,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP

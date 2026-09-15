@@ -186,9 +186,229 @@ export async function getTopSellingProducts({ shopId, limit = 5 }) {
   };
 }
 
+/**
+ * Get daily reconciliation summary for POS Seller to cross-check sales before closing
+ */
+export async function getDailyReconciliation({ shopId, date }) {
+  const targetDate = date || new Date().toISOString().slice(0, 10);
+
+  let sql = `
+    SELECT 
+      COUNT(t.id) as total_transactions,
+      COALESCE(SUM(t.total_amount), 0) as total_sales,
+      COALESCE(SUM(t.subtotal_amount), 0) as total_gross,
+      COALESCE(SUM(t.discount_amount), 0) as total_discounts,
+      COALESCE(SUM(CASE WHEN t.payment_method = 'cash' THEN t.total_amount ELSE 0 END), 0) as cash_total,
+      COALESCE(SUM(CASE WHEN t.payment_method = 'card' THEN t.total_amount ELSE 0 END), 0) as card_total,
+      COALESCE(SUM(CASE WHEN t.payment_method = 'mobile_money' THEN t.total_amount ELSE 0 END), 0) as mobile_money_total,
+      COALESCE(SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END), 0) as completed_count,
+      COALESCE(SUM(CASE WHEN t.status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled_count,
+      COALESCE(SUM(CASE WHEN t.status = 'refunded' THEN 1 ELSE 0 END), 0) as refunded_count
+    FROM transactions t
+    WHERE DATE(t.transaction_date) = ?
+  `;
+  const params = [targetDate];
+
+  if (shopId) {
+    sql += ' AND t.shop_id = ?';
+    params.push(shopId);
+  }
+
+  const result = await query(sql, params);
+  const row = result[0] || {};
+
+  // Total items sold
+  let itemsSql = `
+    SELECT COALESCE(SUM(ti.quantity), 0) as total_units_sold
+    FROM transactions t
+    JOIN transaction_items ti ON t.id = ti.transaction_id
+    WHERE t.status = 'completed' AND DATE(t.transaction_date) = ?
+  `;
+  const itemParams = [targetDate];
+  if (shopId) {
+    itemsSql += ' AND t.shop_id = ?';
+    itemParams.push(shopId);
+  }
+  const itemsResult = await query(itemsSql, itemParams);
+  const totalUnits = itemsResult[0] ? parseInt(itemsResult[0].total_units_sold, 10) : 0;
+
+  // Check if daily close has already been compiled for this date
+  let closeCheckSql = `SELECT id, compiled_at FROM daily_reports WHERE report_date = ?`;
+  const closeParams = [targetDate];
+  if (shopId) {
+    closeCheckSql += ' AND shop_id = ?';
+    closeParams.push(shopId);
+  }
+  const closeCheck = await query(closeCheckSql, closeParams);
+  const isClosed = closeCheck && closeCheck.length > 0;
+
+  // Retrieve shop currency configuration
+  let shopCurrency = { currency_code: 'TZS', currency_symbol: 'TSh' };
+  if (shopId) {
+    const shopRow = await query('SELECT currency_code, currency_symbol FROM shops WHERE id = ?', [shopId]);
+    if (shopRow && shopRow.length > 0) {
+      shopCurrency = shopRow[0];
+    }
+  }
+
+  // Retrieve today's completed transactions for line-by-line audit cross-check
+  let txnListSql = `
+    SELECT 
+      t.id,
+      t.total_amount,
+      t.payment_method,
+      t.transaction_date,
+      COALESCE((SELECT SUM(quantity) FROM transaction_items WHERE transaction_id = t.id), 0) as items_count
+    FROM transactions t
+    WHERE DATE(t.transaction_date) = ? AND t.status = 'completed'
+  `;
+  const txnListParams = [targetDate];
+  if (shopId) {
+    txnListSql += ' AND t.shop_id = ?';
+    txnListParams.push(shopId);
+  }
+  txnListSql += ' ORDER BY t.transaction_date DESC';
+
+  const txns = await query(txnListSql, txnListParams);
+  const formattedTxns = (txns || []).map(t => {
+    const d = new Date(t.transaction_date);
+    const hours = String(d.getHours()).padStart(2, '0');
+    const mins = String(d.getMinutes()).padStart(2, '0');
+    return {
+      id: t.id,
+      total_amount: parseFloat(Number(t.total_amount).toFixed(2)),
+      payment_method: t.payment_method,
+      time: `${hours}:${mins}`,
+      items_count: parseInt(t.items_count, 10) || 0
+    };
+  });
+
+  const txnCount = parseInt(row.total_transactions, 10) || 0;
+
+  return {
+    shop_id: shopId || null,
+    date: targetDate,
+    reconcile_date: targetDate,
+    is_closed: isClosed,
+    closed_at: isClosed ? closeCheck[0].compiled_at : null,
+    total_transactions: txnCount,
+    transactions_count: txnCount,
+    total_units_sold: totalUnits,
+    total_items_sold: totalUnits,
+    total_sales: parseFloat(Number(row.total_sales).toFixed(2)),
+    total_gross: parseFloat(Number(row.total_gross).toFixed(2)),
+    total_discounts: parseFloat(Number(row.total_discounts).toFixed(2)),
+    currency_code: shopCurrency.currency_code || 'TZS',
+    currency_symbol: shopCurrency.currency_symbol || 'TSh',
+    payment_breakdown: {
+      cash: parseFloat(Number(row.cash_total).toFixed(2)),
+      card: parseFloat(Number(row.card_total).toFixed(2)),
+      mobile_money: parseFloat(Number(row.mobile_money_total).toFixed(2))
+    },
+    status_counts: {
+      completed: parseInt(row.completed_count, 10) || 0,
+      cancelled: parseInt(row.cancelled_count, 10) || 0,
+      refunded: parseInt(row.refunded_count, 10) || 0
+    },
+    transactions: formattedTxns
+  };
+}
+
+/**
+ * Get aggregated products sold report for Shop Admin (tabular format)
+ */
+export async function getProductsSoldReport({ shopId, startDate, endDate, category, search }) {
+  let whereClauses = ["t.status = 'completed'"];
+  let params = [];
+
+  if (shopId) {
+    whereClauses.push('t.shop_id = ?');
+    params.push(shopId);
+  }
+
+  if (startDate) {
+    whereClauses.push('DATE(t.transaction_date) >= ?');
+    params.push(startDate);
+  }
+
+  if (endDate) {
+    whereClauses.push('DATE(t.transaction_date) <= ?');
+    params.push(endDate);
+  }
+
+  if (category) {
+    whereClauses.push('p.category = ?');
+    params.push(category);
+  }
+
+  if (search) {
+    whereClauses.push('(p.name LIKE ? OR p.id LIKE ?)');
+    const term = `%${search}%`;
+    params.push(term, term);
+  }
+
+  const whereStr = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+  const sql = `
+    SELECT 
+      p.id AS product_id,
+      p.name,
+      p.category,
+      p.price AS catalog_price,
+      p.stock_quantity AS current_stock,
+      s.name AS shop_name,
+      s.currency_code,
+      s.currency_symbol,
+      COALESCE(SUM(ti.quantity), 0) AS total_quantity_sold,
+      COALESCE(SUM(ti.subtotal), 0) AS total_revenue,
+      CASE 
+        WHEN SUM(ti.quantity) > 0 THEN ROUND(SUM(ti.subtotal) / SUM(ti.quantity), 2)
+        ELSE p.price 
+      END AS average_selling_price
+    FROM transaction_items ti
+    JOIN transactions t ON ti.transaction_id = t.id
+    JOIN products p ON ti.product_id = p.id
+    JOIN shops s ON p.shop_id = s.id
+    ${whereStr}
+    GROUP BY p.id, p.name, p.category, p.price, p.stock_quantity, s.name, s.currency_code, s.currency_symbol
+    ORDER BY total_quantity_sold DESC, total_revenue DESC
+  `;
+
+  const rows = await query(sql, params);
+
+  const totalUnits = rows.reduce((sum, r) => sum + parseInt(r.total_quantity_sold, 10), 0);
+  const totalRevenue = rows.reduce((sum, r) => sum + parseFloat(r.total_revenue), 0);
+
+  return {
+    shop_id: shopId || null,
+    start_date: startDate || null,
+    end_date: endDate || null,
+    summary: {
+      distinct_products_sold: rows.length,
+      total_units_sold: totalUnits,
+      total_revenue: parseFloat(totalRevenue.toFixed(2))
+    },
+    products: rows.map(r => ({
+      product_id: r.product_id,
+      name: r.name,
+      category: r.category,
+      catalog_price: parseFloat(r.catalog_price),
+      current_stock: parseInt(r.current_stock, 10),
+      shop_name: r.shop_name,
+      currency_code: r.currency_code || 'TZS',
+      currency_symbol: r.currency_symbol || 'TSh',
+      total_quantity_sold: parseInt(r.total_quantity_sold, 10),
+      total_revenue: parseFloat(r.total_revenue),
+      average_selling_price: parseFloat(r.average_selling_price)
+    }))
+  };
+}
+
 export default {
   getDailyReport,
   triggerDailyClose,
   getReportRange,
-  getTopSellingProducts
+  getTopSellingProducts,
+  getDailyReconciliation,
+  getProductsSoldReport
 };

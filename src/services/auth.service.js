@@ -36,7 +36,7 @@ export async function authenticateUser({ identifier, username, email, password }
 
   // Lookup user by username or email
   const users = await query(
-    `SELECT u.*, s.name as shop_name, s.shop_code 
+    `SELECT u.*, s.name as shop_name, s.shop_code, s.currency_code, s.currency_symbol, s.currency_name 
      FROM users u 
      LEFT JOIN shops s ON u.shop_id = s.id 
      WHERE (u.username = ? OR u.email = ?) LIMIT 1`,
@@ -85,7 +85,10 @@ export async function authenticateUser({ identifier, username, email, password }
       role: user.role,
       shop_id: user.shop_id,
       shop_name: user.shop_name || null,
-      shop_code: user.shop_code || null
+      shop_code: user.shop_code || null,
+      shop_currency: user.currency_code || 'TZS',
+      shop_currency_symbol: user.currency_symbol || 'TSh',
+      shop_currency_name: user.currency_name || 'Tanzanian Shilling'
     }
   };
 }
@@ -96,7 +99,8 @@ export async function authenticateUser({ identifier, username, email, password }
 export async function getUserProfile(userId) {
   const users = await query(
     `SELECT u.id, u.username, u.email, u.role, u.full_name, u.shop_id, u.created_at,
-            s.name as shop_name, s.shop_code, s.address as shop_address
+            s.name as shop_name, s.shop_code, s.address as shop_address,
+            s.currency_code as shop_currency, s.currency_symbol as shop_currency_symbol, s.currency_name as shop_currency_name
      FROM users u
      LEFT JOIN shops s ON u.shop_id = s.id
      WHERE u.id = ? LIMIT 1`,
@@ -109,7 +113,13 @@ export async function getUserProfile(userId) {
     throw err;
   }
 
-  return users[0];
+  const user = users[0];
+  return {
+    ...user,
+    shop_currency: user.shop_currency || 'TZS',
+    shop_currency_symbol: user.shop_currency_symbol || 'TSh',
+    shop_currency_name: user.shop_currency_name || 'Tanzanian Shilling'
+  };
 }
 
 /**

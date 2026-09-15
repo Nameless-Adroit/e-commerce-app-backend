@@ -9,9 +9,14 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key_pos_ecommerce_
  */
 export async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.startsWith('Bearer ') 
+  let token = authHeader && authHeader.startsWith('Bearer ') 
     ? authHeader.split(' ')[1] 
     : null;
+
+  // Fallback to query parameter (e.g. for direct PDF/labels downloads or browser window.open)
+  if (!token && req.query && req.query.token) {
+    token = req.query.token;
+  }
 
   if (!token) {
     return res.status(401).json({

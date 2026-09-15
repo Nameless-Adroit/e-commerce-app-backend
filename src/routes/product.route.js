@@ -58,4 +58,12 @@ router.post(
   productController.recordShrinkage
 );
 
+// 8. Generate Printable PDF Sheet of QR Code Labels (SRS 3.2)
+router.get(
+  '/:id/qr-labels',
+  authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN, ROLES.SELLER]),
+  productController.generateQRLabels
+);
+
 export default router;
+

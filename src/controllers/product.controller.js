@@ -143,6 +143,27 @@ export async function listProducts(req, res, next) {
   }
 }
 
+/**
+ * Generate a printable PDF containing a sheet of QR code labels for a product
+ */
+export async function generateQRLabels(req, res, next) {
+  try {
+    const { doc, product } = await productService.generateProductQRLabelsPDF({
+      productId: req.params.id,
+      shopId: req.targetShopId,
+      count: req.query.count || 15
+    });
+
+    const filename = `labels-${product.id}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+
+    doc.pipe(res);
+  } catch (err) {
+    next(err);
+  }
+}
+
 export default {
   generateId,
   createProduct,
@@ -150,5 +171,7 @@ export default {
   restockProduct,
   recordShrinkage,
   getProductById,
-  listProducts
+  listProducts,
+  generateQRLabels
 };
+

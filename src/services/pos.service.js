@@ -46,8 +46,11 @@ export async function scanProduct({ productId, shopId }) {
  * Confirm and process POS checkout transaction (SRS 3.3)
  * Executes atomic ACID transaction with row-level locks and automatic inventory deduction.
  */
-export async function processCheckout({ shopId, sellerId, checkoutData }) {
-  const { items, payment_method = PAYMENT_METHODS.CASH, notes, discount = 0 } = checkoutData;
+export async function processCheckout({ shopId, sellerId: directSellerId, currentUser, checkoutData }) {
+  const sellerId = directSellerId || (currentUser ? currentUser.id : null);
+  const paymentMethodVal = checkoutData.payment_method || checkoutData.paymentMethod || PAYMENT_METHODS.CASH;
+  const payment_method = String(paymentMethodVal).toUpperCase();
+  const { items, notes, discount = 0 } = checkoutData;
 
   if (!items || !Array.isArray(items) || items.length === 0) {
     const err = new Error('Cart must contain at least one item.');
@@ -102,13 +105,26 @@ export async function processCheckout({ shopId, sellerId, checkoutData }) {
         throw err;
       }
 
-      const unitPrice = parseFloat(product.price);
-      const subtotal = unitPrice * requestedQty;
+      // Authoritatively determine selling unit price: allow seller override if supplied, otherwise use catalog price
+      let unitPrice = parseFloat(product.price);
+      const customPriceInput = item.unitPrice !== undefined ? item.unitPrice : item.unit_price;
+      if (customPriceInput !== undefined && customPriceInput !== null && String(customPriceInput).trim() !== '') {
+        const parsedCustomPrice = parseFloat(customPriceInput);
+        if (isNaN(parsedCustomPrice) || !isFinite(parsedCustomPrice) || parsedCustomPrice < 0) {
+          const err = new Error(`Invalid price '${customPriceInput}' for '${product.name}'. Price must be a valid non-negative number.`);
+          err.statusCode = 400;
+          throw err;
+        }
+        unitPrice = parseFloat(parsedCustomPrice.toFixed(2));
+      }
+
+      const subtotal = parseFloat((unitPrice * requestedQty).toFixed(2));
       totalSubtotal += subtotal;
 
       verifiedLineItems.push({
         productId: product.id,
         name: product.name,
+        catalogPrice: parseFloat(product.price),
         requestedQty,
         unitPrice,
         subtotal,

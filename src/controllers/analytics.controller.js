@@ -83,9 +83,53 @@ export async function getTopSellingProducts(req, res, next) {
   }
 }
 
+/**
+ * Get daily reconciliation summary for POS Seller (breakdown by payment method and transactions)
+ */
+export async function getDailyReconciliation(req, res, next) {
+  try {
+    const result = await analyticsService.getDailyReconciliation({
+      shopId: req.targetShopId,
+      date: req.query.date
+    });
+
+    res.status(200).json({
+      success: true,
+      data: result
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Tabular report of products sold with aggregated units, revenue, and average selling price
+ */
+export async function getProductsSoldReport(req, res, next) {
+  try {
+    const result = await analyticsService.getProductsSoldReport({
+      shopId: req.targetShopId,
+      startDate: req.query.start_date,
+      endDate: req.query.end_date,
+      category: req.query.category,
+      search: req.query.search
+    });
+
+    res.status(200).json({
+      success: true,
+      data: result
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export default {
   getDailyReport,
   triggerDailyClose,
   getReportRange,
-  getTopSellingProducts
+  getTopSellingProducts,
+  getDailyReconciliation,
+  getProductsSoldReport
 };
+

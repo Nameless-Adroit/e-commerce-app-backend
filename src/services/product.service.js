@@ -1,6 +1,8 @@
 import { query, executeTransaction } from '../config/database.config.js';
 import { generateUniqueProductId } from '../utils/id-generator.util.js';
 import { INVENTORY_CHANGE_TYPES } from '../config/constants.js';
+import QRCode from 'qrcode';
+import PDFDocument from 'pdfkit';
 
 /**
  * Generates a unique alphanumeric product ID for a given shop
@@ -140,18 +142,26 @@ export async function updateProduct({ productId, shopId, updateData }) {
 /**
  * Scan / Lookup a product by its unique alphanumeric ID
  */
-export async function getProductById({ productId, shopId }) {
+export async function getProductById(productIdOrObj, maybeShopId) {
+  let pId = productIdOrObj;
+  let sId = maybeShopId;
+
+  if (productIdOrObj && typeof productIdOrObj === 'object') {
+    pId = productIdOrObj.productId;
+    sId = productIdOrObj.shopId;
+  }
+
   let sql = `
-    SELECT p.*, s.name as shop_name, s.shop_code
+    SELECT p.*, s.name as shop_name, s.shop_code, s.currency_code, s.currency_symbol
     FROM products p
     JOIN shops s ON p.shop_id = s.id
     WHERE p.id = ?
   `;
-  const params = [productId.trim().toUpperCase()];
+  const params = [String(pId || '').trim().toUpperCase()];
 
-  if (shopId) {
+  if (sId) {
     sql += ' AND p.shop_id = ?';
-    params.push(shopId);
+    params.push(sId);
   }
 
   const products = await query(sql, params);
@@ -199,7 +209,7 @@ export async function listProducts({ shopId, filters }) {
   const parsedOffset = parseInt(offset, 10);
 
   const sql = `
-    SELECT p.*, s.name as shop_name, s.shop_code
+    SELECT p.*, s.name as shop_name, s.shop_code, s.currency_code, s.currency_symbol
     FROM products p
     JOIN shops s ON p.shop_id = s.id
     ${whereStr}
@@ -225,10 +235,123 @@ export async function listProducts({ shopId, filters }) {
   };
 }
 
+/**
+ * Generates a printable PDF label sheet for a product with a grid of scannable QR codes.
+ * Each label includes product name, product ID, shop price in local currency, and QR code.
+ */
+export async function generateProductQRLabelsPDF({ productId, shopId, count = 15 }) {
+  const product = await getProductById(productId, shopId);
+  if (!product) {
+    const error = new Error('Product not found or unauthorized access.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const labelCount = Math.min(Math.max(parseInt(count, 10) || 15, 1), 60);
+
+  // Generate QR Code PNG Buffer
+  const qrBuffer = await QRCode.toBuffer(product.id, {
+    width: 250,
+    margin: 1,
+    errorCorrectionLevel: 'M'
+  });
+
+  const doc = new PDFDocument({
+    size: 'A4',
+    margin: 25,
+    info: {
+      Title: `QR Labels - ${product.name}`,
+      Author: 'POS System'
+    }
+  });
+
+  // A4 dimensions: 595.28 x 841.89 points
+  const cols = 3;
+  const rows = 5;
+  const labelsPerPage = cols * rows; // 15
+  const cardWidth = 168;
+  const cardHeight = 145;
+  const startX = 35;
+  const startY = 35;
+  const gapX = 15;
+  const gapY = 12;
+
+  const symbol = product.currency_symbol || 'TSh';
+  const priceFormatted = `${symbol} ${Number(product.price).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+
+  for (let i = 0; i < labelCount; i++) {
+    if (i > 0 && i % labelsPerPage === 0) {
+      doc.addPage();
+    }
+
+    const pageIndex = i % labelsPerPage;
+    const col = pageIndex % cols;
+    const row = Math.floor(pageIndex / cols);
+
+    const x = startX + col * (cardWidth + gapX);
+    const y = startY + row * (cardHeight + gapY);
+
+    // Border with rounded corners
+    doc.roundedRect(x, y, cardWidth, cardHeight, 6)
+       .lineWidth(0.8)
+       .strokeColor('#d1d5db')
+       .stroke();
+
+    // Shop name header
+    doc.fontSize(7)
+       .fillColor('#6b7280')
+       .text((product.shop_name || 'RETAIL STORE').toUpperCase(), x + 4, y + 8, {
+         width: cardWidth - 8,
+         align: 'center',
+         ellipsis: true
+       });
+
+    // Product name
+    doc.fontSize(8.5)
+       .font('Helvetica-Bold')
+       .fillColor('#111827')
+       .text(product.name, x + 4, y + 18, {
+         width: cardWidth - 8,
+         align: 'center',
+         height: 20,
+         ellipsis: true
+       });
+
+    // Scannable QR Code Image
+    const qrSize = 65;
+    const qrX = x + (cardWidth - qrSize) / 2;
+    const qrY = y + 40;
+    doc.image(qrBuffer, qrX, qrY, { width: qrSize, height: qrSize });
+
+    // Product ID (scannable barcode text)
+    doc.fontSize(7.5)
+       .font('Helvetica')
+       .fillColor('#374151')
+       .text(product.id, x + 4, y + 109, {
+         width: cardWidth - 8,
+         align: 'center'
+       });
+
+    // Price
+    doc.fontSize(10)
+       .font('Helvetica-Bold')
+       .fillColor('#059669')
+       .text(priceFormatted, x + 4, y + 122, {
+         width: cardWidth - 8,
+         align: 'center'
+       });
+  }
+
+  doc.end();
+  return { doc, product };
+}
+
 export default {
   generateProductId,
   createProduct,
   updateProduct,
   getProductById,
-  listProducts
+  listProducts,
+  generateProductQRLabelsPDF
 };
+
