@@ -12,7 +12,7 @@
 --   seller_charlie -> Seller123!
 -- =============================================================================
 
-USE `pos_ecommerce_db`;
+-- USE `pos_ecommerce_db`;
 
 SET FOREIGN_KEY_CHECKS = 0;
 

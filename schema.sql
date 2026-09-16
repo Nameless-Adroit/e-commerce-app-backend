@@ -3,12 +3,12 @@
 -- Database Schema Definition (schema.sql)
 -- DBMS: MySQL 8.x / MariaDB
 -- =============================================================================
-
-CREATE DATABASE IF NOT EXISTS `pos_ecommerce_db`
-  CHARACTER SET utf8mb4
-  COLLATE utf8mb4_unicode_ci;
-
-USE `pos_ecommerce_db`;
+-- Note: When importing via DirectAdmin phpMyAdmin, first select your database
+-- (e.g. `jmsoluti_pos_ecommerce`) on the left, then import this file.
+-- CREATE DATABASE IF NOT EXISTS `pos_ecommerce_db`
+--   CHARACTER SET utf8mb4
+--   COLLATE utf8mb4_unicode_ci;
+-- USE `pos_ecommerce_db`;
 
 -- Disable foreign key checks during drop/recreate
 SET FOREIGN_KEY_CHECKS = 0;

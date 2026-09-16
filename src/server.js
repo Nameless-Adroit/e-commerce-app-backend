@@ -1,7 +1,10 @@
 import app from './app.js';
 import { testConnection } from './config/database.config.js';
 
-const PORT = parseInt(process.env.PORT, 10) || 3000;
+// Support both standard TCP ports and CloudLinux / Passenger / DirectAdmin Unix socket paths
+const rawPort = process.env.PORT || 3000;
+const isUnixSocket = typeof rawPort === 'string' && isNaN(Number(rawPort));
+const PORT = isUnixSocket ? rawPort : parseInt(rawPort, 10);
 const HOST = process.env.HOST || '0.0.0.0';
 
 async function startServer() {
@@ -10,13 +13,19 @@ async function startServer() {
   // Test database connection
   await testConnection();
 
-  app.listen(PORT, HOST, () => {
-    console.log(`📡 Server listening on http://${HOST}:${PORT}`);
-    console.log(`📡 Local machine access: http://localhost:${PORT}`);
-    console.log(`📱 LAN phone access:    http://192.168.0.13:${PORT}`);
-    console.log(`📄 API Documentation:   API_DOCUMENTATION.md`);
-    console.log(`🔐 RBAC Roles active:   super_admin, admin, seller`);
-  });
+  if (isUnixSocket) {
+    // CloudLinux / Passenger Unix domain socket (DirectAdmin Node App)
+    app.listen(PORT, () => {
+      console.log(`📡 Server listening on Passenger socket: ${PORT}`);
+      console.log(`🔐 RBAC Roles active: super_admin, admin, seller`);
+    });
+  } else {
+    // Standard TCP port (Local development or PM2 / reverse proxy)
+    app.listen(PORT, HOST, () => {
+      console.log(`📡 Server listening on http://${HOST}:${PORT}`);
+      console.log(`🔐 RBAC Roles active: super_admin, admin, seller`);
+    });
+  }
 }
 
 startServer();

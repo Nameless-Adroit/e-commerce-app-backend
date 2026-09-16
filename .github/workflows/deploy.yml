@@ -1,0 +1,29 @@
+name: Deploy Backend to DirectAdmin
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy-ssh:
+    runs-on: ubuntu-latest
+    # This job runs if you set up SSH secrets in your GitHub repository
+    steps:
+      - name: Deploy via SSH & Git Pull
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_SSH_PORT || 22 }}
+          script: |
+            echo "🚀 Deploying updates to DirectAdmin..."
+            cd ${{ secrets.SERVER_PATH || 'pos-backend' }}
+            git pull origin main
+            npm install --omit=dev
+            # Passenger restarts automatically when tmp/restart.txt is touched
+            mkdir -p tmp
+            touch tmp/restart.txt
+            echo "✅ Deployment completed & application restarted!"

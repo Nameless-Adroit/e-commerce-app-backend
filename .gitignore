@@ -55,3 +55,6 @@ dist/
 build/
 tmp/
 temp/
+*.zip
+*- Copy/
+*- Copy*
