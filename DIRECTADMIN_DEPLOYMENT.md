@@ -86,7 +86,7 @@ Most DirectAdmin servers provide the **"Setup Node.js App"** tool (powered by Cl
 
 1. In DirectAdmin, navigate to **Extra Features** > **Setup Node.js App**.
 2. Click **Create Application**:
-   - **Node.js version**: Select **`20.x`** (or `18.x` LTS).
+   - **Node.js version**: Select **`20.x`** or **`18.x`** if available in the dropdown. If your server only offers **`16.20.2`**, select **`16.20.2`** (the backend is compatible).
    - **Application mode**: Select **`Production`**.
    - **Application root**: Enter the relative path to your backend folder (e.g. `pos-backend` or `domains/api.yourdomain.com/public_html`).
    - **Application URL**: Select the domain/subdomain where the API should live (e.g., `api.yourdomain.com` or `yourdomain.com/api`).
