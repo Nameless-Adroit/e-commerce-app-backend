@@ -20,16 +20,34 @@ DROP TABLE IF EXISTS `transactions`;
 DROP TABLE IF EXISTS `products`;
 DROP TABLE IF EXISTS `users`;
 DROP TABLE IF EXISTS `shops`;
+DROP TABLE IF EXISTS `businesses`;
 
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- -----------------------------------------------------------------------------
--- 1. SHOPS TABLE (Multi-Tenant Shop/Business Support)
+-- 1. BUSINESSES TABLE (Platform Enterprise Tenants)
+-- -----------------------------------------------------------------------------
+CREATE TABLE `businesses` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `business_code` VARCHAR(20) NOT NULL UNIQUE COMMENT 'Unique identifier prefix (e.g. BIZ01)',
+  `name` VARCHAR(150) NOT NULL COMMENT 'Business Display Name',
+  `currency_code` VARCHAR(10) NOT NULL DEFAULT 'TZS' COMMENT 'Base currency ISO code (e.g. TZS, USD, KES)',
+  `currency_symbol` VARCHAR(10) NOT NULL DEFAULT 'TSh' COMMENT 'Currency display symbol (e.g. TSh, $, KSh)',
+  `currency_name` VARCHAR(50) NOT NULL DEFAULT 'Tanzanian Shilling' COMMENT 'Full currency name',
+  `status` ENUM('active', 'suspended') NOT NULL DEFAULT 'active',
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_businesses_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- -----------------------------------------------------------------------------
+-- 2. SHOPS TABLE (Multi-Tenant Shops under Businesses)
 -- -----------------------------------------------------------------------------
 CREATE TABLE `shops` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `business_id` INT NOT NULL COMMENT 'Parent Business entity',
   `shop_code` VARCHAR(20) NOT NULL UNIQUE COMMENT 'Unique identifier prefix (e.g. SHP01)',
-  `name` VARCHAR(150) NOT NULL COMMENT 'Business or Shop Display Name',
+  `name` VARCHAR(150) NOT NULL COMMENT 'Shop Display Name',
   `address` VARCHAR(255) NULL,
   `phone` VARCHAR(50) NULL,
   `currency_code` VARCHAR(10) NOT NULL DEFAULT 'TZS' COMMENT 'Base currency ISO code (e.g. TZS, USD, KES)',
@@ -37,25 +55,31 @@ CREATE TABLE `shops` (
   `currency_name` VARCHAR(50) NOT NULL DEFAULT 'Tanzanian Shilling' COMMENT 'Full currency name',
   `is_active` BOOLEAN NOT NULL DEFAULT TRUE,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT `fk_shops_business` FOREIGN KEY (`business_id`) REFERENCES `businesses` (`id`) ON DELETE CASCADE,
+  INDEX `idx_shops_business` (`business_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -----------------------------------------------------------------------------
--- 2. USERS TABLE (Strict RBAC: Super Admin, Admin, Seller)
+-- 3. USERS TABLE (Strict RBAC: Super Admin, Admin, Seller)
 -- -----------------------------------------------------------------------------
 CREATE TABLE `users` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
   `username` VARCHAR(50) NOT NULL UNIQUE,
   `email` VARCHAR(100) NOT NULL UNIQUE,
   `password_hash` VARCHAR(255) NOT NULL,
+  `temporary_password` BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'Flags if user must change credentials on first login',
   `role` ENUM('super_admin', 'admin', 'seller') NOT NULL,
-  `shop_id` INT NULL COMMENT 'NULL for super_admin; References assigned shop for admin/seller',
+  `business_id` INT NULL COMMENT 'NULL for super_admin; Owned business for admin; Assigned business for seller',
+  `shop_id` INT NULL COMMENT 'NULL for super_admin and admin; Assigned branch shop for seller',
   `full_name` VARCHAR(100) NOT NULL,
   `is_active` BOOLEAN NOT NULL DEFAULT TRUE,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT `fk_users_business` FOREIGN KEY (`business_id`) REFERENCES `businesses` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_users_shop` FOREIGN KEY (`shop_id`) REFERENCES `shops` (`id`) ON DELETE SET NULL,
   INDEX `idx_users_role` (`role`),
+  INDEX `idx_users_business` (`business_id`),
   INDEX `idx_users_shop` (`shop_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -92,6 +116,7 @@ CREATE TABLE `transactions` (
   `total_amount` DECIMAL(10, 2) NOT NULL,
   `payment_method` ENUM('cash', 'card', 'mobile_money') NOT NULL DEFAULT 'cash',
   `status` ENUM('completed', 'refunded', 'cancelled') NOT NULL DEFAULT 'completed',
+  `original_transaction_id` VARCHAR(50) NULL COMMENT 'References parent sale if this is a customer return transaction',
   `notes` VARCHAR(255) NULL,
   `transaction_date` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -99,7 +124,8 @@ CREATE TABLE `transactions` (
   CONSTRAINT `fk_transactions_seller` FOREIGN KEY (`seller_id`) REFERENCES `users` (`id`),
   INDEX `idx_transactions_shop` (`shop_id`),
   INDEX `idx_transactions_seller` (`seller_id`),
-  INDEX `idx_transactions_date` (`transaction_date`)
+  INDEX `idx_transactions_date` (`transaction_date`),
+  INDEX `idx_transactions_original` (`original_transaction_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -----------------------------------------------------------------------------

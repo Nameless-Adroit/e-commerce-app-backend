@@ -242,12 +242,20 @@ export async function getDailyReconciliation({ shopId, date }) {
   const closeCheck = await query(closeCheckSql, closeParams);
   const isClosed = closeCheck && closeCheck.length > 0;
 
-  // Retrieve shop currency configuration
+  // Retrieve shop and business currency configuration
   let shopCurrency = { currency_code: 'TZS', currency_symbol: 'TSh' };
   if (shopId) {
-    const shopRow = await query('SELECT currency_code, currency_symbol FROM shops WHERE id = ?', [shopId]);
+    const shopRow = await query(`
+      SELECT s.currency_code, s.currency_symbol, b.currency_code as biz_currency_code, b.currency_symbol as biz_currency_symbol 
+      FROM shops s
+      LEFT JOIN businesses b ON s.business_id = b.id
+      WHERE s.id = ? LIMIT 1
+    `, [shopId]);
     if (shopRow && shopRow.length > 0) {
-      shopCurrency = shopRow[0];
+      shopCurrency = {
+        currency_code: shopRow[0].biz_currency_code || shopRow[0].currency_code || 'TZS',
+        currency_symbol: shopRow[0].biz_currency_symbol || shopRow[0].currency_symbol || 'TSh'
+      };
     }
   }
 

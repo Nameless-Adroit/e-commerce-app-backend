@@ -23,7 +23,14 @@ router.post(
   posController.checkout
 );
 
-// 3. Transaction history
+// 3. Process customer return transaction (Prompt Section 5)
+router.post(
+  '/return',
+  authorize([ROLES.SELLER, ROLES.ADMIN, ROLES.SUPER_ADMIN]),
+  posController.processReturn
+);
+
+// 4. Transaction history
 router.get(
   '/transactions',
   authorize([ROLES.SELLER, ROLES.ADMIN, ROLES.SUPER_ADMIN]),

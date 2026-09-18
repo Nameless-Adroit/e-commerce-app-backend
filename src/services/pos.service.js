@@ -208,9 +208,159 @@ export async function processCheckout({ shopId, sellerId: directSellerId, curren
 }
 
 /**
+ * Process a customer return transaction (SRS 3.3 / Prompt Section 5)
+ * Creates a return transaction (status = 'refunded', notes/reason, original_transaction_id),
+ * creates line item records, restocks the inventory in products, and records inventory_logs.
+ */
+export async function processReturn({ shopId, sellerId: directSellerId, currentUser, returnData }) {
+  const sellerId = directSellerId || (currentUser ? currentUser.id : null);
+  const { 
+    items, 
+    reason = 'Customer Return', 
+    original_transaction_id = null, 
+    payment_method = PAYMENT_METHODS.CASH,
+    is_defective = false 
+  } = returnData;
+
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    const err = new Error('Return payload must contain at least one item.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Retrieve shop code for generating unique return transaction ID
+  const shops = await query('SELECT shop_code FROM shops WHERE id = ? LIMIT 1', [shopId]);
+  const shopCode = shops && shops.length > 0 ? shops[0].shop_code : 'SHP';
+  const returnTransactionId = generateTransactionId(shopCode).replace('TXN', 'RTN');
+
+  return await executeTransaction(async (conn) => {
+    let totalReturnAmount = 0;
+    const verifiedReturnItems = [];
+
+    for (const item of items) {
+      const productId = item.productId || item.product_id;
+      const cleanId = productId ? productId.trim().toUpperCase() : null;
+      const quantity = parseInt(item.quantity, 10);
+
+      if (!cleanId || !quantity || quantity <= 0) {
+        const err = new Error('Product ID and positive quantity are required for each returned item.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      // Lock product row
+      const [products] = await conn.execute(
+        `SELECT id, name, price, stock_quantity FROM products WHERE id = ? AND shop_id = ? FOR UPDATE`,
+        [cleanId, shopId]
+      );
+
+      if (!products || products.length === 0) {
+        const err = new Error(`Product '${cleanId}' not found in this shop.`);
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const product = products[0];
+      const unitPrice = parseFloat(item.unitPrice !== undefined ? item.unitPrice : (item.unit_price !== undefined ? item.unit_price : product.price));
+      const subtotal = parseFloat((unitPrice * quantity).toFixed(2));
+      totalReturnAmount += subtotal;
+
+      const previousStock = product.stock_quantity;
+      // If item is defective, do not inflate sellable inventory
+      const newStock = is_defective ? previousStock : previousStock + quantity;
+
+      verifiedReturnItems.push({
+        productId: product.id,
+        name: product.name,
+        quantity,
+        unitPrice,
+        subtotal,
+        previousStock,
+        newStock,
+        restocked: !is_defective
+      });
+    }
+
+    // 1. Insert master return transaction record (status = 'refunded')
+    await conn.execute(
+      `INSERT INTO transactions (id, shop_id, seller_id, subtotal_amount, discount_amount, total_amount, payment_method, status, original_transaction_id, notes, transaction_date)
+       VALUES (?, ?, ?, ?, 0.00, ?, ?, ?, ?, ?, NOW())`,
+      [
+        returnTransactionId,
+        shopId,
+        sellerId,
+        totalReturnAmount,
+        totalReturnAmount,
+        String(payment_method).toUpperCase(),
+        TRANSACTION_STATUS.REFUNDED,
+        original_transaction_id || null,
+        reason || 'Customer Return'
+      ]
+    );
+
+    // 2. Insert line items, update stock, and write audit logs
+    for (const item of verifiedReturnItems) {
+      await conn.execute(
+        `INSERT INTO transaction_items (transaction_id, product_id, quantity, unit_price, subtotal)
+         VALUES (?, ?, ?, ?, ?)`,
+        [returnTransactionId, item.productId, item.quantity, item.unitPrice, item.subtotal]
+      );
+
+      if (item.restocked) {
+        await conn.execute(
+          `UPDATE products SET stock_quantity = ? WHERE id = ?`,
+          [item.newStock, item.productId]
+        );
+
+        await conn.execute(
+          `INSERT INTO inventory_logs (shop_id, product_id, user_id, change_type, quantity_change, previous_stock, new_stock, reason)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            shopId,
+            item.productId,
+            sellerId,
+            INVENTORY_CHANGE_TYPES.RETURN,
+            item.quantity,
+            item.previousStock,
+            item.newStock,
+            `Customer Return #${returnTransactionId}: ${reason}`
+          ]
+        );
+      } else {
+        // Defective item audit log
+        await conn.execute(
+          `INSERT INTO inventory_logs (shop_id, product_id, user_id, change_type, quantity_change, previous_stock, new_stock, reason)
+           VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
+          [
+            shopId,
+            item.productId,
+            sellerId,
+            INVENTORY_CHANGE_TYPES.SHRINKAGE,
+            item.previousStock,
+            item.previousStock,
+            `Defective Customer Return #${returnTransactionId}: ${reason}`
+          ]
+        );
+      }
+    }
+
+    return {
+      transaction_id: returnTransactionId,
+      shop_id: shopId,
+      seller_id: sellerId,
+      total_amount: totalReturnAmount,
+      status: TRANSACTION_STATUS.REFUNDED,
+      original_transaction_id: original_transaction_id || null,
+      reason,
+      items: verifiedReturnItems
+    };
+  });
+}
+
+/**
  * Query transaction history with filter parameters and summary aggregation
  */
-export async function getTransactionHistory({ shopId, queryParams }) {
+export async function getTransactionHistory({ shopId, businessId, queryParams }) {
   const { limit = 50, offset = 0, date, start_date, end_date, seller_id, status } = queryParams;
 
   let whereClauses = [];
@@ -219,6 +369,9 @@ export async function getTransactionHistory({ shopId, queryParams }) {
   if (shopId) {
     whereClauses.push('t.shop_id = ?');
     params.push(shopId);
+  } else if (businessId) {
+    whereClauses.push('s.business_id = ?');
+    params.push(businessId);
   }
 
   if (date) {
@@ -342,6 +495,7 @@ export async function getTransactionById({ transactionId, shopId }) {
 export default {
   scanProduct,
   processCheckout,
+  processReturn,
   getTransactionHistory,
   getTransactionById
 };

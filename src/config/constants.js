@@ -5,6 +5,19 @@ export const ROLES = {
   SELLER: 'seller'
 };
 
+// Ownership Scopes
+export const SCOPES = {
+  SYSTEM: 'SYSTEM',
+  BUSINESS: 'BUSINESS',
+  SHOP: 'SHOP'
+};
+
+// Business Statuses
+export const BUSINESS_STATUS = {
+  ACTIVE: 'active',
+  SUSPENDED: 'suspended'
+};
+
 // Transaction Statuses
 export const TRANSACTION_STATUS = {
   COMPLETED: 'completed',
@@ -32,6 +45,9 @@ export const INVENTORY_CHANGE_TYPES = {
 export const ID_CONFIG = {
   PRODUCT_PREFIX: 'PRD',
   TRANSACTION_PREFIX: 'TXN',
+  RETURN_PREFIX: 'RTN',
+  BUSINESS_PREFIX: 'BIZ',
+  SHOP_PREFIX: 'SHP',
   // Unambiguous Base30 charset (omits 0, O, 1, I, L)
   CHARSET: '23456789ABCDEFGHJKMNPQRSTUVWXYZ',
   ENTROPY_LENGTH: 5
@@ -39,6 +55,8 @@ export const ID_CONFIG = {
 
 export default {
   ROLES,
+  SCOPES,
+  BUSINESS_STATUS,
   TRANSACTION_STATUS,
   PAYMENT_METHODS,
   INVENTORY_CHANGE_TYPES,

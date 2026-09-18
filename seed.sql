@@ -24,24 +24,32 @@ TRUNCATE TABLE `transactions`;
 TRUNCATE TABLE `products`;
 TRUNCATE TABLE `users`;
 TRUNCATE TABLE `shops`;
+TRUNCATE TABLE `businesses`;
 
 -- -----------------------------------------------------------------------------
--- 1. SEED SHOPS (With Flexible Currency Configuration)
+-- 1. SEED BUSINESSES (Platform Enterprise Tenants)
 -- -----------------------------------------------------------------------------
-INSERT INTO `shops` (`id`, `shop_code`, `name`, `address`, `phone`, `currency_code`, `currency_symbol`, `currency_name`, `is_active`) VALUES
-(1, 'SHP01', 'Kariakoo Electronics & Tech Hub', 'Kariakoo Market St, Gerezani, Dar es Salaam', '+255 712 345 678', 'TZS', 'TSh', 'Tanzanian Shilling', TRUE),
-(2, 'SHP02', 'Mlimani City Fashion Boutique', 'Mlimani City Mall, Sam Nujoma Rd, Dar es Salaam', '+255 754 987 654', 'TZS', 'TSh', 'Tanzanian Shilling', TRUE);
+INSERT INTO `businesses` (`id`, `business_code`, `name`, `currency_code`, `currency_symbol`, `currency_name`, `status`) VALUES
+(1, 'BIZ01', 'Apex Commerce & Tech Group', 'TZS', 'TSh', 'Tanzanian Shilling', 'active'),
+(2, 'BIZ02', 'Elena Fashion & Retail Group', 'TZS', 'TSh', 'Tanzanian Shilling', 'active');
 
 -- -----------------------------------------------------------------------------
--- 2. SEED USERS (Strict RBAC: super_admin, admin, seller)
+-- 2. SEED SHOPS (With Flexible Currency & Business Association)
 -- -----------------------------------------------------------------------------
-INSERT INTO `users` (`id`, `username`, `email`, `password_hash`, `role`, `shop_id`, `full_name`, `is_active`) VALUES
-(1, 'superadmin', 'superadmin@system.com', '$2a$10$uS8h5rrsc0.A40b.tyBSUu.zwa2vZaKd.kgI/G5fe8nZZf2qLxDRa', 'super_admin', NULL, 'Alexander Cross', TRUE),
-(2, 'admin_tech', 'admin.tech@downtown.com', '$2a$10$TfJIAodYeeTPQGJSX0ILBe3/lsE/VDdvia758JRUIxnwEWCffluz.', 'admin', 1, 'Marcus Vance', TRUE),
-(3, 'admin_metro', 'admin.metro@fashion.com', '$2a$10$TfJIAodYeeTPQGJSX0ILBe3/lsE/VDdvia758JRUIxnwEWCffluz.', 'admin', 2, 'Elena Rostova', TRUE),
-(4, 'seller_alice', 'alice@downtown.com', '$2a$10$vEh2dCQfdLQ7cS8QsYzxTuOXFmIK.7gN7CiM2Su1GSEO0lLwCLZCG', 'seller', 1, 'Alice Morgan', TRUE),
-(5, 'seller_bob', 'bob@downtown.com', '$2a$10$vEh2dCQfdLQ7cS8QsYzxTuOXFmIK.7gN7CiM2Su1GSEO0lLwCLZCG', 'seller', 1, 'Bob Kendrick', TRUE),
-(6, 'seller_charlie', 'charlie@fashion.com', '$2a$10$vEh2dCQfdLQ7cS8QsYzxTuOXFmIK.7gN7CiM2Su1GSEO0lLwCLZCG', 'seller', 2, 'Charlie Dupont', TRUE);
+INSERT INTO `shops` (`id`, `business_id`, `shop_code`, `name`, `address`, `phone`, `currency_code`, `currency_symbol`, `currency_name`, `is_active`) VALUES
+(1, 1, 'SHP01', 'Kariakoo Electronics & Tech Hub', 'Kariakoo Market St, Gerezani, Dar es Salaam', '+255 712 345 678', 'TZS', 'TSh', 'Tanzanian Shilling', TRUE),
+(2, 2, 'SHP02', 'Mlimani City Fashion Boutique', 'Mlimani City Mall, Sam Nujoma Rd, Dar es Salaam', '+255 754 987 654', 'TZS', 'TSh', 'Tanzanian Shilling', TRUE);
+
+-- -----------------------------------------------------------------------------
+-- 3. SEED USERS (Strict RBAC: super_admin, admin, seller)
+-- -----------------------------------------------------------------------------
+INSERT INTO `users` (`id`, `username`, `email`, `password_hash`, `temporary_password`, `role`, `business_id`, `shop_id`, `full_name`, `is_active`) VALUES
+(1, 'superadmin', 'superadmin@system.com', '$2a$10$uS8h5rrsc0.A40b.tyBSUu.zwa2vZaKd.kgI/G5fe8nZZf2qLxDRa', FALSE, 'super_admin', NULL, NULL, 'Alexander Cross', TRUE),
+(2, 'admin_tech', 'admin.tech@downtown.com', '$2a$10$TfJIAodYeeTPQGJSX0ILBe3/lsE/VDdvia758JRUIxnwEWCffluz.', FALSE, 'admin', 1, NULL, 'Marcus Vance', TRUE),
+(3, 'admin_metro', 'admin.metro@fashion.com', '$2a$10$TfJIAodYeeTPQGJSX0ILBe3/lsE/VDdvia758JRUIxnwEWCffluz.', FALSE, 'admin', 2, NULL, 'Elena Rostova', TRUE),
+(4, 'seller_alice', 'alice@downtown.com', '$2a$10$vEh2dCQfdLQ7cS8QsYzxTuOXFmIK.7gN7CiM2Su1GSEO0lLwCLZCG', FALSE, 'seller', 1, 1, 'Alice Morgan', TRUE),
+(5, 'seller_bob', 'bob@downtown.com', '$2a$10$vEh2dCQfdLQ7cS8QsYzxTuOXFmIK.7gN7CiM2Su1GSEO0lLwCLZCG', FALSE, 'seller', 1, 1, 'Bob Kendrick', TRUE),
+(6, 'seller_charlie', 'charlie@fashion.com', '$2a$10$vEh2dCQfdLQ7cS8QsYzxTuOXFmIK.7gN7CiM2Su1GSEO0lLwCLZCG', FALSE, 'seller', 2, 2, 'Charlie Dupont', TRUE);
 
 -- -----------------------------------------------------------------------------
 -- 3. SEED PRODUCTS (With Sensible Tanzanian Shilling Retail Prices)
