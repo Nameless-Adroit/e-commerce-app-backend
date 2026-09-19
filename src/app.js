@@ -32,7 +32,8 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Shop-Id', 'x-shop-id', 'Accept', 'Origin', 'X-Requested-With'],
+  optionsSuccessStatus: 200
 };
 
 app.use(helmet({ crossOriginResourcePolicy: false }));
