@@ -42,14 +42,25 @@ INSERT INTO `shops` (`id`, `business_id`, `shop_code`, `name`, `address`, `phone
 
 -- -----------------------------------------------------------------------------
 -- 3. SEED USERS (Strict RBAC: super_admin, admin, seller)
+-- Passwords:
+--   superadmin   -> SuperAdmin123!
+-- PINs (Admin/Seller):
+--   All Admins & Sellers -> 1234
+-- Phones (Tanzania E.164):
+--   superadmin     -> +255700000001
+--   admin_tech     -> +255712100001
+--   admin_metro    -> +255712100002
+--   seller_alice   -> +255712200001
+--   seller_bob     -> +255712200002
+--   seller_charlie -> +255712200003
 -- -----------------------------------------------------------------------------
-INSERT INTO `users` (`id`, `username`, `email`, `password_hash`, `temporary_password`, `role`, `business_id`, `shop_id`, `full_name`, `is_active`) VALUES
-(1, 'superadmin', 'superadmin@system.com', '$2a$10$uS8h5rrsc0.A40b.tyBSUu.zwa2vZaKd.kgI/G5fe8nZZf2qLxDRa', FALSE, 'super_admin', NULL, NULL, 'Alexander Cross', TRUE),
-(2, 'admin_tech', 'admin.tech@downtown.com', '$2a$10$TfJIAodYeeTPQGJSX0ILBe3/lsE/VDdvia758JRUIxnwEWCffluz.', FALSE, 'admin', 1, NULL, 'Marcus Vance', TRUE),
-(3, 'admin_metro', 'admin.metro@fashion.com', '$2a$10$TfJIAodYeeTPQGJSX0ILBe3/lsE/VDdvia758JRUIxnwEWCffluz.', FALSE, 'admin', 2, NULL, 'Elena Rostova', TRUE),
-(4, 'seller_alice', 'alice@downtown.com', '$2a$10$vEh2dCQfdLQ7cS8QsYzxTuOXFmIK.7gN7CiM2Su1GSEO0lLwCLZCG', FALSE, 'seller', 1, 1, 'Alice Morgan', TRUE),
-(5, 'seller_bob', 'bob@downtown.com', '$2a$10$vEh2dCQfdLQ7cS8QsYzxTuOXFmIK.7gN7CiM2Su1GSEO0lLwCLZCG', FALSE, 'seller', 1, 1, 'Bob Kendrick', TRUE),
-(6, 'seller_charlie', 'charlie@fashion.com', '$2a$10$vEh2dCQfdLQ7cS8QsYzxTuOXFmIK.7gN7CiM2Su1GSEO0lLwCLZCG', FALSE, 'seller', 2, 2, 'Charlie Dupont', TRUE);
+INSERT INTO `users` (`id`, `username`, `email`, `phone_number`, `password_hash`, `pin_hash`, `temporary_password`, `role`, `business_id`, `shop_id`, `full_name`, `is_active`) VALUES
+(1, 'superadmin', 'superadmin@system.com', '+255700000001', '$2a$10$uS8h5rrsc0.A40b.tyBSUu.zwa2vZaKd.kgI/G5fe8nZZf2qLxDRa', NULL, FALSE, 'super_admin', NULL, NULL, 'Alexander Cross', TRUE),
+(2, 'admin_tech', 'admin.tech@downtown.com', '+255712100001', '$2a$10$TfJIAodYeeTPQGJSX0ILBe3/lsE/VDdvia758JRUIxnwEWCffluz.', '$2a$10$T8nL17ZglpP7Lwv2heOA/uE0BFCTMw0.Znxcp1zYIPnGuRB1JI13u', FALSE, 'admin', 1, NULL, 'Marcus Vance', TRUE),
+(3, 'admin_metro', 'admin.metro@fashion.com', '+255712100002', '$2a$10$TfJIAodYeeTPQGJSX0ILBe3/lsE/VDdvia758JRUIxnwEWCffluz.', '$2a$10$T8nL17ZglpP7Lwv2heOA/uE0BFCTMw0.Znxcp1zYIPnGuRB1JI13u', FALSE, 'admin', 2, NULL, 'Elena Rostova', TRUE),
+(4, 'seller_alice', 'alice@downtown.com', '+255712200001', '$2a$10$vEh2dCQfdLQ7cS8QsYzxTuOXFmIK.7gN7CiM2Su1GSEO0lLwCLZCG', '$2a$10$T8nL17ZglpP7Lwv2heOA/uE0BFCTMw0.Znxcp1zYIPnGuRB1JI13u', FALSE, 'seller', 1, 1, 'Alice Morgan', TRUE),
+(5, 'seller_bob', 'bob@downtown.com', '+255712200002', '$2a$10$vEh2dCQfdLQ7cS8QsYzxTuOXFmIK.7gN7CiM2Su1GSEO0lLwCLZCG', '$2a$10$T8nL17ZglpP7Lwv2heOA/uE0BFCTMw0.Znxcp1zYIPnGuRB1JI13u', FALSE, 'seller', 1, 1, 'Bob Kendrick', TRUE),
+(6, 'seller_charlie', 'charlie@fashion.com', '+255712200003', '$2a$10$vEh2dCQfdLQ7cS8QsYzxTuOXFmIK.7gN7CiM2Su1GSEO0lLwCLZCG', '$2a$10$T8nL17ZglpP7Lwv2heOA/uE0BFCTMw0.Znxcp1zYIPnGuRB1JI13u', FALSE, 'seller', 2, 2, 'Charlie Dupont', TRUE);
 
 -- -----------------------------------------------------------------------------
 -- 3. SEED PRODUCTS (With Sensible Tanzanian Shilling Retail Prices)

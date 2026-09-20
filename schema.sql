@@ -18,6 +18,9 @@ DROP TABLE IF EXISTS `inventory_logs`;
 DROP TABLE IF EXISTS `transaction_items`;
 DROP TABLE IF EXISTS `transactions`;
 DROP TABLE IF EXISTS `products`;
+DROP TABLE IF EXISTS `audit_logs`;
+DROP TABLE IF EXISTS `security_logs`;
+DROP TABLE IF EXISTS `sessions`;
 DROP TABLE IF EXISTS `users`;
 DROP TABLE IF EXISTS `shops`;
 DROP TABLE IF EXISTS `businesses`;
@@ -67,8 +70,13 @@ CREATE TABLE `users` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
   `username` VARCHAR(50) NOT NULL UNIQUE,
   `email` VARCHAR(100) NOT NULL UNIQUE,
-  `password_hash` VARCHAR(255) NOT NULL,
+  `phone_number` VARCHAR(20) NULL UNIQUE COMMENT 'Normalized E.164 phone (+255XXXXXXXXX) for Admin/Seller login',
+  `password_hash` VARCHAR(255) NOT NULL COMMENT 'Bcrypt hash for Super Admin or legacy fallback',
+  `pin_hash` VARCHAR(255) NULL COMMENT 'Bcrypt hash of 4-6 digit staff PIN',
+  `profile_image` VARCHAR(500) NULL COMMENT 'URL or asset path of profile image',
   `temporary_password` BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'Flags if user must change credentials on first login',
+  `failed_login_attempts` INT NOT NULL DEFAULT 0 COMMENT 'Counter for brute-force mitigation',
+  `locked_until` DATETIME NULL COMMENT 'Lockout expiration timestamp',
   `role` ENUM('super_admin', 'admin', 'seller') NOT NULL,
   `business_id` INT NULL COMMENT 'NULL for super_admin; Owned business for admin; Assigned business for seller',
   `shop_id` INT NULL COMMENT 'NULL for super_admin and admin; Assigned branch shop for seller',
@@ -79,6 +87,7 @@ CREATE TABLE `users` (
   CONSTRAINT `fk_users_business` FOREIGN KEY (`business_id`) REFERENCES `businesses` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_users_shop` FOREIGN KEY (`shop_id`) REFERENCES `shops` (`id`) ON DELETE SET NULL,
   INDEX `idx_users_role` (`role`),
+  INDEX `idx_users_phone` (`phone_number`),
   INDEX `idx_users_business` (`business_id`),
   INDEX `idx_users_shop` (`shop_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -188,3 +197,64 @@ CREATE TABLE `daily_reports` (
   INDEX `idx_reports_shop` (`shop_id`),
   INDEX `idx_reports_date` (`report_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- -----------------------------------------------------------------------------
+-- 8. SESSIONS TABLE (Server-Side Authenticated Device Sessions)
+-- -----------------------------------------------------------------------------
+CREATE TABLE `sessions` (
+  `id` VARCHAR(64) PRIMARY KEY COMMENT 'Unique cryptographic Session ID',
+  `user_id` INT NOT NULL,
+  `token_family_id` VARCHAR(64) NOT NULL COMMENT 'Tracks refresh token rotation family for reuse detection',
+  `refresh_token_hash` VARCHAR(128) NOT NULL COMMENT 'SHA-256 hash of active refresh token',
+  `device_name` VARCHAR(150) NULL,
+  `device_id` VARCHAR(150) NULL,
+  `ip_address` VARCHAR(45) NULL,
+  `user_agent` VARCHAR(255) NULL,
+  `is_revoked` BOOLEAN NOT NULL DEFAULT FALSE,
+  `revoke_reason` VARCHAR(100) NULL,
+  `expires_at` DATETIME NOT NULL,
+  `last_used_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT `fk_sessions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  INDEX `idx_sessions_user` (`user_id`),
+  INDEX `idx_sessions_family` (`token_family_id`),
+  INDEX `idx_sessions_token_hash` (`refresh_token_hash`),
+  INDEX `idx_sessions_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- -----------------------------------------------------------------------------
+-- 9. SECURITY_LOGS TABLE (Security Events, Brute-Force & Session Anomalies)
+-- -----------------------------------------------------------------------------
+CREATE TABLE `security_logs` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `event_type` VARCHAR(50) NOT NULL COMMENT 'e.g. LOGIN_SUCCESS, LOGIN_FAILED, AUTH_LOCKOUT, TOKEN_REFRESH_REUSE',
+  `user_id` INT NULL,
+  `identifier` VARCHAR(100) NULL COMMENT 'Sanitized phone/username, NEVER passwords or tokens',
+  `ip_address` VARCHAR(45) NULL,
+  `user_agent` VARCHAR(255) NULL,
+  `details` JSON NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX `idx_sec_logs_event` (`event_type`),
+  INDEX `idx_sec_logs_user` (`user_id`),
+  INDEX `idx_sec_logs_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- -----------------------------------------------------------------------------
+-- 10. AUDIT_LOGS TABLE (Business Operations & User Identity Changes)
+-- -----------------------------------------------------------------------------
+CREATE TABLE `audit_logs` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `user_id` INT NOT NULL,
+  `action` VARCHAR(100) NOT NULL COMMENT 'e.g. USER_CREATED, USER_UPDATED, PRICE_CHANGED, BUSINESS_CLOSED',
+  `target_resource` VARCHAR(100) NOT NULL,
+  `target_id` VARCHAR(50) NULL,
+  `shop_id` INT NULL,
+  `business_id` INT NULL,
+  `changes` JSON NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX `idx_audit_user` (`user_id`),
+  INDEX `idx_audit_action` (`action`),
+  INDEX `idx_audit_shop` (`shop_id`),
+  INDEX `idx_audit_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+

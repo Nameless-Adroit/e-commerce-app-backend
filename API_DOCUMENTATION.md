@@ -32,19 +32,35 @@ Comprehensive RESTful API reference for the Multi-Tier E-Commerce & Point of Sal
 
 ---
 
-## 🔐 2. Authentication & User Management (`/api/auth`)
+## 🔐 2. Authentication & Session Management (`/api/auth`)
+
+> [!IMPORTANT]
+> The platform uses a **dual-token security model**:
+> - **Access Token**: Short-lived (15 minutes), passed via `Authorization: Bearer <TOKEN>` header, stored exclusively in client volatile application memory.
+> - **Refresh Token**: Long-lived (7 days), transmitted automatically via `HttpOnly`, `Secure`, `SameSite` cookie (`pos_refresh_token`).
 
 ### 2.1 Unified Login Portal
-Authenticates users and returns the JWT token along with the role-specific redirect URL (SRS 3.1).
+Authenticates users and returns a 15-minute access token in JSON and a 7-day refresh token in an HTTP-only cookie. Supports Staff Phone + PIN and Super Admin credentials.
 
 - **Endpoint:** `POST /api/auth/login`
-- **Access:** Public
-- **Request Body:** *(identifier can be either username or email)*
+- **Access:** Public (Rate limited: max 20 requests / 15 minutes)
+- **Request Body (Staff Phone + PIN):**
 ```json
 {
-  "identifier": "admin_tech",
-  "password": "Admin123!"
+  "phoneNumber": "0754 123 456",
+  "pin": "1234"
 }
+```
+- **Request Body (Super Admin):**
+```json
+{
+  "identifier": "superadmin",
+  "password": "SuperAdmin123!"
+}
+```
+- **Response Headers:**
+```http
+Set-Cookie: pos_refresh_token=...; Path=/api/auth; HttpOnly; SameSite=Lax; Max-Age=604800
 ```
 - **Success Response (200 OK):**
 ```json
@@ -53,13 +69,14 @@ Authenticates users and returns the JWT token along with the role-specific redir
   "message": "Authentication successful.",
   "data": {
     "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-    "redirect_url": "/dashboard/admin",
+    "redirect_url": "/dashboard/seller",
     "user": {
-      "id": 2,
-      "username": "admin_tech",
-      "email": "admin.tech@downtown.com",
-      "full_name": "Marcus Vance",
-      "role": "admin",
+      "id": 4,
+      "username": "seller_alice",
+      "email": "alice@downtown.com",
+      "phone_number": "+255754123456",
+      "full_name": "Alice Morgan",
+      "role": "seller",
       "shop_id": 1,
       "shop_name": "Downtown Tech & Gadgets",
       "shop_code": "SHP01"
@@ -68,17 +85,148 @@ Authenticates users and returns the JWT token along with the role-specific redir
 }
 ```
 
-*Role Redirection Targets:*
-- `super_admin` ➔ `/dashboard/super-admin`
-- `admin` ➔ `/dashboard/admin`
-- `seller` ➔ `/dashboard/seller`
+---
+
+### 2.2 Silent Token Refresh
+Rotates the refresh token and issues a fresh 15-minute access token. Features token replay/reuse detection.
+
+- **Endpoint:** `POST /api/auth/refresh`
+- **Access:** Public (requires `pos_refresh_token` HTTP-only cookie)
+- **Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "expires_in": 900
+  }
+}
+```
 
 ---
 
-### 2.2 Get Current User Profile
+### 2.3 Sign Out (Current Device)
+Revokes the current server session and clears the HTTP-only refresh cookie.
+
+- **Endpoint:** `POST /api/auth/logout`
+- **Access:** Authenticated (or valid refresh cookie)
+- **Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Signed out successfully."
+}
+```
+
+---
+
+### 2.4 Sign Out Everywhere (All Devices)
+Revokes all active sessions for the current user account across all phones, tablets, and web browsers.
+
+- **Endpoint:** `POST /api/auth/logout-all`
+- **Access:** Authenticated
+- **Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "All active sessions revoked successfully."
+}
+```
+
+---
+
+### 2.5 List Active User Sessions
+Retrieves all currently active login sessions for the signed-in user, detailing device types, IPs, and login timestamps.
+
+- **Endpoint:** `GET /api/auth/sessions`
+- **Access:** Authenticated
+- **Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "sessions": [
+      {
+        "id": "sess_8df3a1b0-...",
+        "device_type": "mobile",
+        "ip_address": "192.168.1.50",
+        "created_at": "2026-09-20 10:15:00",
+        "last_rotated_at": "2026-09-20 11:30:00",
+        "expires_at": "2026-09-27 10:15:00"
+      }
+    ]
+  }
+}
+```
+
+---
+
+### 2.6 Revoke Specific Session
+Terminates a specific remote session (e.g. lost phone or obsolete terminal).
+
+- **Endpoint:** `DELETE /api/auth/sessions/:sessionId`
+- **Access:** Authenticated
+- **Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Session revoked successfully."
+}
+```
+
+---
+
+### 2.7 Update Staff PIN
+Allows an authenticated user to change their 4-6 digit numeric authorization PIN.
+
+- **Endpoint:** `PUT /api/auth/pin`
+- **Access:** Authenticated
+- **Request Body:**
+```json
+{
+  "currentPin": "1234",
+  "newPin": "5678"
+}
+```
+- **Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "PIN updated successfully."
+}
+```
+
+---
+
+### 2.8 Update User Profile
+Updates user contact details, full name, phone number, and optional profile image.
+
+- **Endpoint:** `PUT /api/auth/profile`
+- **Access:** Authenticated
+- **Request Body:**
+```json
+{
+  "full_name": "Alice Morgan Vance",
+  "phone_number": "0754 999 888",
+  "profile_image": "data:image/jpeg;base64,..."
+}
+```
+- **Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Profile updated successfully.",
+  "data": {
+    "user": { ... }
+  }
+}
+```
+
+---
+
+### 2.9 Get Current User Profile
 - **Endpoint:** `GET /api/auth/profile`
-- **Access:** Authenticated (Any Role)
-- **Headers:** `Authorization: Bearer <TOKEN>`
+- **Access:** Authenticated
 - **Success Response (200 OK):**
 ```json
 {
@@ -87,6 +235,7 @@ Authenticates users and returns the JWT token along with the role-specific redir
     "id": 4,
     "username": "seller_alice",
     "email": "alice@downtown.com",
+    "phone_number": "+255754123456",
     "role": "seller",
     "full_name": "Alice Morgan",
     "shop_id": 1,
@@ -98,15 +247,16 @@ Authenticates users and returns the JWT token along with the role-specific redir
 
 ---
 
-### 2.3 Register New User
+### 2.10 Register New User
 - **Endpoint:** `POST /api/auth/users`
 - **Access:** `super_admin` (can create all roles) or `admin` (can create sellers for assigned shop)
-- **Request Body:** *(shop_id is optional for Admins as it is auto-inferred from their shop)*
+- **Request Body:**
 ```json
 {
   "username": "seller_david",
   "email": "david@downtown.com",
-  "password": "SellerPassword123!",
+  "phone_number": "0754 111 222",
+  "pin": "4321",
   "role": "seller",
   "shop_id": 1,
   "full_name": "David Miller"
@@ -120,13 +270,15 @@ Authenticates users and returns the JWT token along with the role-specific redir
   "data": {
     "id": 7,
     "username": "seller_david",
-    "email": "david@downtown.com",
+    "phone_number": "+255754111222",
     "role": "seller",
     "shop_id": 1,
     "full_name": "David Miller"
   }
 }
 ```
+
+---
 
 ---
 

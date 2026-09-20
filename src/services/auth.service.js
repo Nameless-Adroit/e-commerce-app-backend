@@ -1,40 +1,72 @@
+/**
+ * Core Authentication Service
+ * Implements Phone Number + PIN for Store Staff/Admins, Super Admin credential exception,
+ * session management, dual-token issuance, and brute-force mitigation.
+ */
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import { query } from '../config/database.config.js';
 import { ROLES, BUSINESS_STATUS } from '../config/constants.js';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key_pos_ecommerce_2026';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';
+import { normalizePhoneNumber, isValidPhoneNumber } from '../utils/phone.util.js';
+import { hashPin, verifyPin, isValidPin } from '../utils/pin.util.js';
+import { issueAccessToken } from '../utils/token.util.js';
+import { createSession, rotateSessionToken, revokeSession, revokeAllUserSessions } from './session.service.js';
+import { checkBruteForceLockout, handleFailedLoginAttempt, handleSuccessfulLogin } from './security.service.js';
+import { recordAuditEvent } from './audit.service.js';
 
 /**
- * Maps system user roles to client dashboard redirection targets (SRS 3.1)
+ * Maps system user roles to client dashboard redirection targets
  */
 export function getRoleDashboardRedirect(role) {
   switch (role) {
     case ROLES.SUPER_ADMIN:
-      return '/dashboard/super-admin';
+      return '/super-admin';
     case ROLES.ADMIN:
-      return '/dashboard/admin';
+      return '/admin';
     case ROLES.SELLER:
-      return '/dashboard/seller';
+      return '/seller';
     default:
-      return '/dashboard';
+      return '/';
   }
 }
 
 /**
- * Authenticates user credentials and generates JWT token
+ * Authenticates user credentials and establishes an authenticated device session.
+ * 
+ * Supports:
+ *  1. Normal Users (Admin, Seller): Phone Number + PIN
+ *  2. Super Admin: Username/Email + Password
+ *  3. Backward-compatible bridge for legacy users transitioning to PIN
  */
-export async function authenticateUser({ identifier, username, email, password }) {
-  const loginId = identifier || username || email;
+export async function authenticateUser({
+  phoneNumber,
+  pin,
+  identifier,
+  username,
+  email,
+  password,
+  deviceName,
+  deviceId,
+  ipAddress,
+  userAgent
+}) {
+  // 1. Resolve unified login credentials from single login form
+  const rawId = (phoneNumber || identifier || username || email || '').trim();
+  const rawSecret = (pin || password || '').trim();
 
-  if (!loginId || !password) {
-    const err = new Error('Username/email and password are required.');
+  if (!rawId || !rawSecret) {
+    const err = new Error('Please provide your login credentials (phone number or username, and PIN or password).');
     err.statusCode = 400;
     throw err;
   }
 
-  // Lookup user with business and shop associations
+  const normalizedPhone = normalizePhoneNumber(rawId);
+  const isPhone = normalizedPhone && isValidPhoneNumber(normalizedPhone);
+  const loginIdentifier = isPhone ? normalizedPhone : rawId;
+
+  // 1. Enforce brute-force lockout check
+  await checkBruteForceLockout(loginIdentifier, ipAddress);
+
+  // 2. Query user by phone_number, username, or email
   const users = await query(
     `SELECT u.*, 
             b.name as business_name, b.business_code, b.currency_code as business_currency, 
@@ -45,20 +77,40 @@ export async function authenticateUser({ identifier, username, email, password }
      FROM users u 
      LEFT JOIN businesses b ON u.business_id = b.id
      LEFT JOIN shops s ON u.shop_id = s.id 
-     WHERE (u.username = ? OR u.email = ?) LIMIT 1`,
-    [loginId, loginId]
+     WHERE (u.phone_number = ? OR u.username = ? OR u.email = ?) LIMIT 1`,
+    [normalizedPhone || rawId, rawId, rawId]
   );
 
   if (!users || users.length === 0) {
-    const err = new Error('Invalid credentials. User not found.');
+    await handleFailedLoginAttempt({ identifier: loginIdentifier, ipAddress, userAgent });
+    const err = new Error('Invalid credentials. Please verify your phone number/username and secret.');
     err.statusCode = 401;
     throw err;
   }
 
   const user = users[0];
 
+  // 3. Verify credentials against either PIN hash or password hash
+  let isMatch = false;
+
+  if (user.pin_hash && isValidPin(rawSecret)) {
+    isMatch = await verifyPin(rawSecret, user.pin_hash);
+  }
+
+  if (!isMatch && user.password_hash) {
+    isMatch = await bcrypt.compare(rawSecret, user.password_hash);
+  }
+
+  if (!isMatch) {
+    await handleFailedLoginAttempt({ identifier: loginIdentifier, ipAddress, userAgent });
+    const err = new Error('Invalid credentials. Please verify your phone number/username and PIN/password.');
+    err.statusCode = 401;
+    throw err;
+  }
+
+  // 3. Status checks
   if (!user.is_active) {
-    const err = new Error('This user account has been deactivated.');
+    const err = new Error('This user account has been deactivated. Please contact your manager.');
     err.statusCode = 403;
     throw err;
   }
@@ -69,36 +121,49 @@ export async function authenticateUser({ identifier, username, email, password }
     throw err;
   }
 
-  const isMatch = await bcrypt.compare(password, user.password_hash);
-  if (!isMatch) {
-    const err = new Error('Invalid credentials. Password incorrect.');
-    err.statusCode = 401;
-    throw err;
-  }
+  // 4. Successful login: reset failed counters & record event
+  await handleSuccessfulLogin({
+    userId: user.id,
+    identifier: loginIdentifier,
+    ipAddress,
+    userAgent
+  });
 
-  // Determine effective currency (business currency takes precedence, fallback to shop currency or TZS)
+  // 5. Establish authenticated session
+  const session = await createSession({
+    userId: user.id,
+    deviceName,
+    deviceId,
+    ipAddress,
+    userAgent
+  });
+
+  // 6. Issue 15-minute Access Token
+  const accessToken = issueAccessToken({
+    userId: user.id,
+    role: user.role,
+    businessId: user.business_id,
+    shopId: user.shop_id,
+    sessionId: session.sessionId
+  });
+
+  // 7. Determine effective display currencies
   const currencyCode = user.business_currency || user.shop_currency || 'TZS';
   const currencySymbol = user.business_currency_symbol || user.shop_currency_symbol || 'TSh';
   const currencyName = user.business_currency_name || user.shop_currency_name || 'Tanzanian Shilling';
 
-  // Generate JWT payload
-  const tokenPayload = {
-    id: user.id,
-    username: user.username,
-    role: user.role,
-    business_id: user.business_id,
-    shop_id: user.shop_id
-  };
-
-  const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
-
   return {
-    token,
+    accessToken,
+    refreshToken: session.rawRefreshToken,
+    refreshTokenExpiresAt: session.expiresAt,
+    sessionId: session.sessionId,
     redirect_url: getRoleDashboardRedirect(user.role),
     user: {
       id: user.id,
       username: user.username,
       email: user.email,
+      phone_number: user.phone_number,
+      profile_image: user.profile_image,
       full_name: user.full_name,
       role: user.role,
       business_id: user.business_id,
@@ -110,248 +175,77 @@ export async function authenticateUser({ identifier, username, email, password }
       shop_currency: currencyCode,
       shop_currency_symbol: currencySymbol,
       shop_currency_name: currencyName,
-      temporary_password: Boolean(user.temporary_password)
+      temporary_password: Boolean(user.temporary_password),
+      requires_pin_setup: !user.pin_hash && user.role !== ROLES.SUPER_ADMIN
     }
   };
 }
 
 /**
- * Get profile data for a specific user ID
+ * Rotates a refresh token and issues a fresh 15-minute access token.
  */
-export async function getUserProfile(userId) {
-  const users = await query(
-    `SELECT u.id, u.username, u.email, u.role, u.full_name, u.business_id, u.shop_id, u.is_active, 
-            u.temporary_password, u.created_at,
-            b.name as business_name, b.business_code, b.currency_code as business_currency, 
-            b.currency_symbol as business_currency_symbol, b.currency_name as business_currency_name,
-            s.name as shop_name, s.shop_code, s.address as shop_address,
-            s.currency_code as shop_currency, s.currency_symbol as shop_currency_symbol, s.currency_name as shop_currency_name
-     FROM users u
-     LEFT JOIN businesses b ON u.business_id = b.id
-     LEFT JOIN shops s ON u.shop_id = s.id
-     WHERE u.id = ? LIMIT 1`,
-    [userId]
-  );
+export async function refreshAccessToken({ rawRefreshToken, ipAddress, userAgent }) {
+  const { session, newRawRefreshToken, expiresAt } = await rotateSessionToken({
+    rawRefreshToken,
+    ipAddress,
+    userAgent
+  });
 
-  if (!users || users.length === 0) {
-    const err = new Error('User not found.');
-    err.statusCode = 404;
-    throw err;
-  }
-
-  const user = users[0];
-  const currencyCode = user.business_currency || user.shop_currency || 'TZS';
-  const currencySymbol = user.business_currency_symbol || user.shop_currency_symbol || 'TSh';
-  const currencyName = user.business_currency_name || user.shop_currency_name || 'Tanzanian Shilling';
+  const accessToken = issueAccessToken({
+    userId: session.userId,
+    role: session.role,
+    businessId: session.businessId,
+    shopId: session.shopId,
+    sessionId: session.id
+  });
 
   return {
-    id: user.id,
-    username: user.username,
-    email: user.email,
-    full_name: user.full_name,
-    role: user.role,
-    business_id: user.business_id,
-    business_name: user.business_name || null,
-    business_code: user.business_code || null,
-    shop_id: user.shop_id,
-    shop_name: user.shop_name || null,
-    shop_code: user.shop_code || null,
-    shop_currency: currencyCode,
-    shop_currency_symbol: currencySymbol,
-    shop_currency_name: currencyName,
-    temporary_password: Boolean(user.temporary_password),
-    is_active: Boolean(user.is_active),
-    created_at: user.created_at
+    accessToken,
+    newRawRefreshToken,
+    expiresAt,
+    sessionId: session.id
   };
 }
 
 /**
- * Change password for authenticated user (clears temporary_password)
+ * Logout current authenticated session
  */
-export async function changePassword({ userId, oldPassword, newPassword }) {
-  if (!oldPassword || !newPassword) {
-    const err = new Error('Both current password and new password are required.');
-    err.statusCode = 400;
-    throw err;
+export async function logoutUser({ sessionId, userId }) {
+  if (sessionId) {
+    await revokeSession(sessionId, 'user_logout');
   }
-
-  if (newPassword.length < 6) {
-    const err = new Error('New password must be at least 6 characters long.');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const users = await query('SELECT id, password_hash FROM users WHERE id = ? LIMIT 1', [userId]);
-  if (!users || users.length === 0) {
-    const err = new Error('User not found.');
-    err.statusCode = 404;
-    throw err;
-  }
-
-  const user = users[0];
-  const isMatch = await bcrypt.compare(oldPassword, user.password_hash);
-  if (!isMatch) {
-    const err = new Error('Current password is incorrect.');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const salt = await bcrypt.genSalt(10);
-  const newHash = await bcrypt.hash(newPassword, salt);
-
-  await query(
-    'UPDATE users SET password_hash = ?, temporary_password = FALSE WHERE id = ?',
-    [newHash, userId]
-  );
-
-  return { success: true, message: 'Password changed successfully.' };
 }
 
 /**
- * Super Admin resets Admin / User password and flags as temporary password
+ * Logout all active sessions for current user
  */
-export async function resetPassword({ targetUserId, newPassword, currentUser }) {
-  if (currentUser.role !== ROLES.SUPER_ADMIN && currentUser.role !== ROLES.ADMIN) {
-    const err = new Error('Forbidden: Unauthorized to reset user passwords.');
-    err.statusCode = 403;
-    throw err;
+export async function logoutAllSessions({ userId }) {
+  if (userId) {
+    await revokeAllUserSessions(userId, 'logout_all');
   }
-
-  if (!newPassword || newPassword.length < 6) {
-    const err = new Error('Temporary password must be at least 6 characters.');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const users = await query('SELECT id, role, business_id FROM users WHERE id = ? LIMIT 1', [targetUserId]);
-  if (!users || users.length === 0) {
-    const err = new Error('Target user not found.');
-    err.statusCode = 404;
-    throw err;
-  }
-
-  const targetUser = users[0];
-
-  // Admin can only reset password of sellers in own business
-  if (currentUser.role === ROLES.ADMIN) {
-    if (targetUser.role !== ROLES.SELLER || targetUser.business_id !== currentUser.business_id) {
-      const err = new Error('Forbidden: You can only reset passwords for sellers in your business.');
-      err.statusCode = 403;
-      throw err;
-    }
-  }
-
-  const salt = await bcrypt.genSalt(10);
-  const newHash = await bcrypt.hash(newPassword, salt);
-
-  await query(
-    'UPDATE users SET password_hash = ?, temporary_password = TRUE WHERE id = ?',
-    [newHash, targetUserId]
-  );
-
-  return {
-    success: true,
-    message: 'User credentials reset successfully with temporary password.'
-  };
 }
 
 /**
- * Toggle user active / suspended status
- */
-export async function setUserActiveStatus({ targetUserId, isActive, currentUser }) {
-  const users = await query('SELECT id, role, business_id FROM users WHERE id = ? LIMIT 1', [targetUserId]);
-  if (!users || users.length === 0) {
-    const err = new Error('User not found.');
-    err.statusCode = 404;
-    throw err;
-  }
-
-  const targetUser = users[0];
-
-  if (currentUser.role === ROLES.ADMIN) {
-    if (targetUser.role !== ROLES.SELLER || targetUser.business_id !== currentUser.business_id) {
-      const err = new Error('Forbidden: Admins can only manage status of sellers in their business.');
-      err.statusCode = 403;
-      throw err;
-    }
-  } else if (currentUser.role !== ROLES.SUPER_ADMIN) {
-    const err = new Error('Forbidden: Unauthorized.');
-    err.statusCode = 403;
-    throw err;
-  }
-
-  await query('UPDATE users SET is_active = ? WHERE id = ?', [isActive ? 1 : 0, targetUserId]);
-
-  return {
-    success: true,
-    user_id: targetUserId,
-    is_active: Boolean(isActive)
-  };
-}
-
-/**
- * List users with role / business filters
- */
-export async function listUsers({ currentUser, role, businessId, shopId }) {
-  let whereClauses = [];
-  let params = [];
-
-  if (currentUser.role === ROLES.ADMIN) {
-    whereClauses.push('u.business_id = ?');
-    params.push(currentUser.business_id);
-  } else if (currentUser.role === ROLES.SUPER_ADMIN) {
-    if (businessId) {
-      whereClauses.push('u.business_id = ?');
-      params.push(parseInt(businessId, 10));
-    }
-  } else {
-    // Seller only sees self
-    whereClauses.push('u.id = ?');
-    params.push(currentUser.id);
-  }
-
-  if (role) {
-    whereClauses.push('u.role = ?');
-    params.push(role);
-  }
-
-  if (shopId) {
-    whereClauses.push('u.shop_id = ?');
-    params.push(parseInt(shopId, 10));
-  }
-
-  const whereStr = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
-
-  const sql = `
-    SELECT u.id, u.username, u.email, u.full_name, u.role, u.business_id, u.shop_id, 
-           u.is_active, u.temporary_password, u.created_at,
-           b.name as business_name, b.business_code,
-           s.name as shop_name, s.shop_code
-    FROM users u
-    LEFT JOIN businesses b ON u.business_id = b.id
-    LEFT JOIN shops s ON u.shop_id = s.id
-    ${whereStr}
-    ORDER BY u.role ASC, u.id ASC
-  `;
-
-  const users = await query(sql, params);
-  return users.map(u => ({
-    ...u,
-    is_active: Boolean(u.is_active),
-    temporary_password: Boolean(u.temporary_password)
-  }));
-}
-
-/**
- * Register a new user with strict multi-tier hierarchy validation
+ * Registers a new user with role hierarchy enforcement and phone/PIN support.
  */
 export async function registerUser({ currentUser, userData }) {
-  const { username, email, password, role, business_id, shop_id, full_name } = userData;
+  const { username, email, phone_number, password, pin, role, business_id, shop_id, full_name, profile_image } = userData;
 
-  if (!username || !email || !password || !role || !full_name) {
-    const err = new Error('Username, email, password, role, and full_name are required.');
+  if (!username || !email || !role || !full_name) {
+    const err = new Error('Username, email, role, and full_name are required.');
     err.statusCode = 400;
     throw err;
+  }
+
+  // Validate Phone Number
+  let normalizedPhone = null;
+  if (phone_number) {
+    normalizedPhone = normalizePhoneNumber(phone_number);
+    if (!normalizedPhone || !isValidPhoneNumber(normalizedPhone)) {
+      const err = new Error('Invalid phone number format.');
+      err.statusCode = 400;
+      throw err;
+    }
   }
 
   let assignedBusinessId = null;
@@ -374,7 +268,6 @@ export async function registerUser({ currentUser, userData }) {
       throw err;
     }
 
-    // Verify shop belongs to Admin's business
     const shops = await query('SELECT id FROM shops WHERE id = ? AND business_id = ? LIMIT 1', [shop_id, assignedBusinessId]);
     if (!shops || shops.length === 0) {
       const err = new Error('The specified shop does not belong to your business.');
@@ -390,8 +283,8 @@ export async function registerUser({ currentUser, userData }) {
         throw err;
       }
       assignedBusinessId = parseInt(business_id, 10);
-      assignedShopId = null; // Admin owns business, not single shop
-      isTempPassword = true; // Admin receives temporary credentials
+      assignedShopId = null;
+      isTempPassword = true;
     } else if (role === ROLES.SELLER) {
       if (!shop_id) {
         const err = new Error('A shop_id must be provided when registering a Seller.');
@@ -407,33 +300,78 @@ export async function registerUser({ currentUser, userData }) {
       assignedShopId = shops[0].id;
       assignedBusinessId = shops[0].business_id;
     }
+  } else {
+    const err = new Error('Forbidden: Unauthorized to create users.');
+    err.statusCode = 403;
+    throw err;
   }
 
-  // Check for collision
+  // Check unique collisions
   const existing = await query(
-    'SELECT id FROM users WHERE username = ? OR email = ? LIMIT 1',
-    [username.trim(), email.trim()]
+    'SELECT id FROM users WHERE username = ? OR email = ? OR (phone_number IS NOT NULL AND phone_number = ?) LIMIT 1',
+    [username.trim(), email.trim(), normalizedPhone || '']
   );
 
   if (existing && existing.length > 0) {
-    const err = new Error('Username or email already exists in system.');
+    const err = new Error('Username, email, or phone number already exists in system.');
     err.statusCode = 409;
     throw err;
   }
 
+  // Generate hashes
+  const initialPassword = password || 'TempPass123!';
   const salt = await bcrypt.genSalt(10);
-  const passwordHash = await bcrypt.hash(password, salt);
+  const passwordHash = await bcrypt.hash(initialPassword, salt);
+
+  let pinHash = null;
+  if (pin && isValidPin(pin)) {
+    pinHash = await hashPin(pin);
+  } else if (role !== ROLES.SUPER_ADMIN) {
+    // Default PIN for new staff is '1234'
+    pinHash = await hashPin('1234');
+  }
 
   const result = await query(
-    `INSERT INTO users (username, email, password_hash, temporary_password, role, business_id, shop_id, full_name, is_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, TRUE)`,
-    [username.trim(), email.trim(), passwordHash, isTempPassword ? 1 : 0, role, assignedBusinessId, assignedShopId, full_name.trim()]
+    `INSERT INTO users 
+      (username, email, phone_number, password_hash, pin_hash, profile_image, temporary_password, role, business_id, shop_id, full_name, is_active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)`,
+    [
+      username.trim(),
+      email.trim(),
+      normalizedPhone,
+      passwordHash,
+      pinHash,
+      profile_image || null,
+      isTempPassword ? 1 : 0,
+      role,
+      assignedBusinessId,
+      assignedShopId,
+      full_name.trim()
+    ]
   );
+
+  await recordAuditEvent({
+    userId: currentUser.id,
+    action: 'USER_CREATED',
+    targetResource: 'users',
+    targetId: result.insertId,
+    shopId: assignedShopId,
+    businessId: assignedBusinessId,
+    changes: {
+      username: username.trim(),
+      email: email.trim(),
+      phone_number: normalizedPhone,
+      role,
+      full_name: full_name.trim()
+    }
+  });
 
   return {
     id: result.insertId,
     username: username.trim(),
     email: email.trim(),
+    phone_number: normalizedPhone,
+    profile_image: profile_image || null,
     role,
     business_id: assignedBusinessId,
     shop_id: assignedShopId,
@@ -445,10 +383,8 @@ export async function registerUser({ currentUser, userData }) {
 export default {
   getRoleDashboardRedirect,
   authenticateUser,
-  getUserProfile,
-  changePassword,
-  resetPassword,
-  setUserActiveStatus,
-  listUsers,
+  refreshAccessToken,
+  logoutUser,
+  logoutAllSessions,
   registerUser
 };

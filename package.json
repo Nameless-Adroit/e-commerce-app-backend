@@ -9,6 +9,8 @@
     "dev": "nodemon src/server.js",
     "db:init": "node src/scripts/init-db.js",
     "db:seed": "node src/scripts/seed-data.js",
+    "db:migrate": "node src/scripts/migrate-auth.js",
+    "test:auth": "node src/scripts/test-auth-security.js",
     "test:id": "node -e \"import('./src/utils/id-generator.util.js').then(({ generateProductId, generateTransactionId }) => { console.log('Sample Product ID:', generateProductId('SHP01')); console.log('Sample TXN ID:', generateTransactionId('SHP01')); });\""
   },
   "keywords": [

@@ -1,11 +1,9 @@
-import jwt from 'jsonwebtoken';
 import { query } from '../config/database.config.js';
 import { ROLES, BUSINESS_STATUS } from '../config/constants.js';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key_pos_ecommerce_2026';
+import { verifyAccessToken } from '../utils/token.util.js';
 
 /**
- * Middleware: Verifies JWT token and attaches user to request
+ * Middleware: Verifies 15-minute Access Token, checks session revocation, and attaches user to request
  */
 export async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -13,7 +11,7 @@ export async function authenticateToken(req, res, next) {
     ? authHeader.split(' ')[1] 
     : null;
 
-  // Fallback to query parameter (e.g. for direct PDF/labels downloads or browser window.open)
+  // Fallback to query parameter (e.g. for direct PDF/labels downloads)
   if (!token && req.query && req.query.token) {
     token = req.query.token;
   }
@@ -21,16 +19,33 @@ export async function authenticateToken(req, res, next) {
   if (!token) {
     return res.status(401).json({
       success: false,
+      code: 'TOKEN_MISSING',
       message: 'Access denied. No authorization token provided.'
     });
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = verifyAccessToken(token);
+
+    // If token includes session_id, verify session has not been revoked
+    if (decoded.session_id) {
+      const sessions = await query(
+        'SELECT is_revoked FROM sessions WHERE id = ? LIMIT 1',
+        [decoded.session_id]
+      );
+      if (sessions.length > 0 && sessions[0].is_revoked) {
+        return res.status(401).json({
+          success: false,
+          code: 'SESSION_REVOKED',
+          message: 'This session has been revoked. Please sign in again.'
+        });
+      }
+    }
 
     // Fetch latest user status and business info from DB
     const users = await query(
-      `SELECT u.id, u.username, u.email, u.role, u.business_id, u.shop_id, u.full_name, u.is_active, u.temporary_password,
+      `SELECT u.id, u.username, u.email, u.phone_number, u.profile_image, u.role, 
+              u.business_id, u.shop_id, u.full_name, u.is_active, u.temporary_password,
               b.name as business_name, b.currency_code as business_currency, b.currency_symbol as business_currency_symbol, 
               b.currency_name as business_currency_name, b.status as business_status
        FROM users u 
@@ -42,6 +57,7 @@ export async function authenticateToken(req, res, next) {
     if (!users || users.length === 0 || !users[0].is_active) {
       return res.status(403).json({
         success: false,
+        code: 'ACCOUNT_DEACTIVATED',
         message: 'Account is invalid or deactivated.'
       });
     }
@@ -52,16 +68,20 @@ export async function authenticateToken(req, res, next) {
     if (user.role !== ROLES.SUPER_ADMIN && user.business_status === BUSINESS_STATUS.SUSPENDED) {
       return res.status(403).json({
         success: false,
+        code: 'BUSINESS_SUSPENDED',
         message: 'Your business account has been suspended. Please contact platform support.'
       });
     }
 
+    user.session_id = decoded.session_id || null;
     req.user = user;
     next();
   } catch (err) {
+    const isExpired = err.name === 'TokenExpiredError';
     return res.status(401).json({
       success: false,
-      message: 'Invalid or expired authentication token.'
+      code: isExpired ? 'TOKEN_EXPIRED' : 'TOKEN_INVALID',
+      message: isExpired ? 'Access token expired.' : 'Invalid authentication token.'
     });
   }
 }

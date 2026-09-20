@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 
 import apiRoutes from './routes/index.route.js';
 import errorHandler from './middleware/error.middleware.js';
+import cookieParserMiddleware from './middleware/cookie.middleware.js';
 
 dotenv.config();
 
@@ -38,6 +39,7 @@ const corsOptions = {
 
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors(corsOptions));
+app.use(cookieParserMiddleware);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
