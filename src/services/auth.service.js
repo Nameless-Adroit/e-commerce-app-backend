@@ -128,7 +128,7 @@ export async function authenticateUser({
   // 4. Successful login: reset failed counters & record event
   await handleSuccessfulLogin({
     userId: user.id,
-    identifier: loginIdentifier,
+    identifier: normalizedPhone,
     ipAddress,
     userAgent
   });
