@@ -59,7 +59,7 @@ export async function getBusinessById(businessId) {
 
   // Retrieve users belonging to this business
   const users = await query(`
-    SELECT u.id, u.username, u.email, u.full_name, u.role, u.shop_id, u.is_active, u.temporary_password,
+    SELECT u.id, u.username, u.email, u.full_name, u.role, u.shop_id, u.is_active, u.temporary_pin,
            s.name as shop_name, s.shop_code
     FROM users u
     LEFT JOIN shops s ON u.shop_id = s.id

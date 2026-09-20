@@ -45,7 +45,7 @@ export async function authenticateToken(req, res, next) {
     // Fetch latest user status and business info from DB
     const users = await query(
       `SELECT u.id, u.username, u.email, u.phone_number, u.profile_image, u.role, 
-              u.business_id, u.shop_id, u.full_name, u.is_active, u.temporary_password,
+              u.business_id, u.shop_id, u.full_name, u.is_active, u.temporary_pin,
               b.name as business_name, b.currency_code as business_currency, b.currency_symbol as business_currency_symbol, 
               b.currency_name as business_currency_name, b.status as business_status
        FROM users u 

@@ -15,7 +15,7 @@ function getClientContext(req) {
 }
 
 /**
- * Unified Login Portal (Phone + PIN for Staff, Username + Password for Super Admin)
+ * Unified Login Portal (Phone Number + 6-Digit PIN for All System Roles)
  */
 export async function login(req, res, next) {
   try {
@@ -321,7 +321,7 @@ export async function listUsers(req, res, next) {
     const whereStr = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
     const sql = `
       SELECT u.id, u.username, u.email, u.phone_number, u.profile_image, u.full_name, u.role, 
-             u.business_id, u.shop_id, u.is_active, u.temporary_password, u.created_at,
+             u.business_id, u.shop_id, u.is_active, u.temporary_pin, u.created_at,
              b.name as business_name, b.business_code,
              s.name as shop_name, s.shop_code
       FROM users u

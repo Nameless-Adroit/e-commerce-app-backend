@@ -105,15 +105,15 @@ export async function testConnection() {
         console.log('✅ Added currency_name column to shops table');
       }
 
-      // 3. Ensure business_id and temporary_password exist on users
+      // 3. Ensure business_id and temporary_pin exist on users
       if (!(await checkColumn('users', 'business_id'))) {
         await connection.query('ALTER TABLE users ADD COLUMN business_id INT NULL AFTER role');
         await connection.query('ALTER TABLE users ADD INDEX idx_users_business (business_id)');
         console.log('✅ Added business_id column to users table');
       }
-      if (!(await checkColumn('users', 'temporary_password'))) {
-        await connection.query('ALTER TABLE users ADD COLUMN temporary_password BOOLEAN NOT NULL DEFAULT FALSE AFTER password_hash');
-        console.log('✅ Added temporary_password column to users table');
+      if (!(await checkColumn('users', 'temporary_pin'))) {
+        await connection.query('ALTER TABLE users ADD COLUMN temporary_pin BOOLEAN NOT NULL DEFAULT FALSE');
+        console.log('✅ Added temporary_pin column to users table');
       }
 
       // 4. Ensure discount and original_transaction_id columns exist on transactions table

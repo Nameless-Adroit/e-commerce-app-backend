@@ -4,13 +4,13 @@
  */
 import bcrypt from 'bcryptjs';
 
-const PIN_REGEX = /^\d{4,6}$/;
+const PIN_REGEX = /^\d{6}$/;
 const BCRYPT_SALT_ROUNDS = 10;
 
 /**
  * Validates whether a raw PIN satisfies the system PIN policy:
- * - Must be a string of exactly 4 to 6 numeric digits
- * - Rejects non-numeric characters, spaces, and empty values
+ * - Must be a string of exactly 6 numeric digits
+ * - Rejects non-numeric characters, spaces, and values with length != 6
  * 
  * @param {string} pin
  * @returns {boolean}
@@ -21,7 +21,7 @@ export function isValidPin(pin) {
 }
 
 /**
- * Securely hashes a numeric PIN using bcrypt with 10 salt rounds.
+ * Securely hashes a numeric 6-digit PIN using bcrypt with 10 salt rounds.
  * NEVER stores or logs the plaintext PIN.
  * 
  * @param {string} pin
@@ -29,7 +29,7 @@ export function isValidPin(pin) {
  */
 export async function hashPin(pin) {
   if (!isValidPin(pin)) {
-    const err = new Error('Invalid PIN. PIN must be between 4 and 6 numeric digits.');
+    const err = new Error('Invalid PIN. PIN must be exactly 6 numeric digits.');
     err.statusCode = 400;
     throw err;
   }

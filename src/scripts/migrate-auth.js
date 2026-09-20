@@ -24,7 +24,7 @@ async function migrate() {
 
     if (!existingCols.has('pin_hash')) {
       console.log('➕ Adding pin_hash column to users...');
-      await query(`ALTER TABLE users ADD COLUMN pin_hash VARCHAR(255) NULL COMMENT 'Bcrypt hash of 4-6 digit staff PIN' AFTER password_hash`);
+      await query(`ALTER TABLE users ADD COLUMN pin_hash VARCHAR(255) NULL COMMENT 'Bcrypt hash of 6-digit staff PIN' AFTER phone_number`);
     }
 
     if (!existingCols.has('profile_image')) {
@@ -32,9 +32,28 @@ async function migrate() {
       await query(`ALTER TABLE users ADD COLUMN profile_image VARCHAR(500) NULL COMMENT 'URL or asset path of profile image' AFTER pin_hash`);
     }
 
+    if (!existingCols.has('temporary_pin')) {
+      console.log('➕ Adding temporary_pin column to users...');
+      await query(`ALTER TABLE users ADD COLUMN temporary_pin BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'Flags if user must change PIN on first login' AFTER profile_image`);
+    }
+
+    // Migrate old temporary_password values to temporary_pin if it existed
+    if (existingCols.has('temporary_password')) {
+      console.log('🔄 Migrating temporary_password to temporary_pin...');
+      await query(`UPDATE users SET temporary_pin = temporary_password`);
+      console.log('🗑️ Dropping legacy temporary_password column...');
+      await query(`ALTER TABLE users DROP COLUMN temporary_password`);
+    }
+
+    // Drop legacy password_hash column if it exists
+    if (existingCols.has('password_hash')) {
+      console.log('🗑️ Dropping legacy password_hash column from users...');
+      await query(`ALTER TABLE users DROP COLUMN password_hash`);
+    }
+
     if (!existingCols.has('failed_login_attempts')) {
       console.log('➕ Adding failed_login_attempts column to users...');
-      await query(`ALTER TABLE users ADD COLUMN failed_login_attempts INT NOT NULL DEFAULT 0 COMMENT 'Counter for brute-force mitigation' AFTER temporary_password`);
+      await query(`ALTER TABLE users ADD COLUMN failed_login_attempts INT NOT NULL DEFAULT 0 COMMENT 'Counter for brute-force mitigation' AFTER temporary_pin`);
     }
 
     if (!existingCols.has('locked_until')) {
@@ -114,24 +133,51 @@ async function migrate() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
-    // 5. Backfill existing known seed users if missing phone or PIN
-    const defaultPinHash = await bcrypt.hash('1234', 10);
+    // 5. Create shop_requests table
+    console.log('📦 Ensuring shop_requests table exists...');
+    await query(`
+      CREATE TABLE IF NOT EXISTS shop_requests (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        business_id INT NOT NULL,
+        requested_by_user_id INT NOT NULL,
+        shop_code VARCHAR(20) NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        address VARCHAR(255) NULL,
+        phone VARCHAR(20) NULL,
+        status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+        admin_notes TEXT NULL,
+        super_admin_notes TEXT NULL,
+        reviewed_by_user_id INT NULL,
+        created_shop_id INT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        reviewed_at DATETIME NULL,
+        CONSTRAINT fk_shop_req_business FOREIGN KEY (business_id) REFERENCES businesses (id) ON DELETE CASCADE,
+        CONSTRAINT fk_shop_req_user FOREIGN KEY (requested_by_user_id) REFERENCES users (id) ON DELETE CASCADE,
+        INDEX idx_shop_req_status (status),
+        INDEX idx_shop_req_business (business_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    // 6. Standardize all seed users with 6-digit PIN (123456), full name, and verified phone numbers
+    const pin6DigitHash = await bcrypt.hash('123456', 10);
     const seedUserMap = {
-      'superadmin': { phone: '+255700000001', pin: null },
-      'admin_tech': { phone: '+255712100001', pin: defaultPinHash },
-      'admin_metro': { phone: '+255712100002', pin: defaultPinHash },
-      'seller_alice': { phone: '+255712200001', pin: defaultPinHash },
-      'seller_bob': { phone: '+255712200002', pin: defaultPinHash },
-      'seller_charlie': { phone: '+255712200003', pin: defaultPinHash }
+      'superadmin': { full_name: 'Alexander Cross', phone: '+255700000001', pin: pin6DigitHash, temp_pin: 0 },
+      'admin_tech': { full_name: 'Marcus Vance', phone: '+255712100001', pin: pin6DigitHash, temp_pin: 0 },
+      'admin_metro': { full_name: 'Elena Rostova', phone: '+255712100002', pin: pin6DigitHash, temp_pin: 0 },
+      'seller_alice': { full_name: 'Alice Morgan', phone: '+255712200001', pin: pin6DigitHash, temp_pin: 0 },
+      'seller_bob': { full_name: 'Bob Kendrick', phone: '+255712200002', pin: pin6DigitHash, temp_pin: 0 },
+      'seller_charlie': { full_name: 'Charlie Dupont', phone: '+255712200003', pin: pin6DigitHash, temp_pin: 0 }
     };
 
     for (const [uname, data] of Object.entries(seedUserMap)) {
       await query(
         `UPDATE users 
-         SET phone_number = COALESCE(phone_number, ?), 
-             pin_hash = COALESCE(pin_hash, ?) 
+         SET full_name = ?,
+             phone_number = ?, 
+             pin_hash = ?,
+             temporary_pin = ?
          WHERE username = ?`,
-        [data.phone, data.pin, uname]
+        [data.full_name, data.phone, data.pin, data.temp_pin, uname]
       );
     }
 

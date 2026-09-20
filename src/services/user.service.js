@@ -17,7 +17,7 @@ import { recordAuditEvent } from './audit.service.js';
 export async function getUserProfile(userId) {
   const users = await query(
     `SELECT u.id, u.username, u.email, u.phone_number, u.profile_image, u.role, u.full_name,
-            u.business_id, u.shop_id, u.is_active, u.temporary_password, u.created_at, u.updated_at,
+            u.business_id, u.shop_id, u.is_active, u.temporary_pin, u.created_at, u.updated_at,
             b.name as business_name, b.business_code, b.currency_code as business_currency, 
             b.currency_symbol as business_currency_symbol, b.currency_name as business_currency_name,
             s.name as shop_name, s.shop_code, s.address as shop_address,
@@ -57,7 +57,8 @@ export async function getUserProfile(userId) {
     shop_currency: currencyCode,
     shop_currency_symbol: currencySymbol,
     shop_currency_name: currencyName,
-    temporary_password: Boolean(user.temporary_password),
+    temporary_pin: Boolean(user.temporary_pin ?? user.temporary_password),
+    temporary_password: Boolean(user.temporary_pin ?? user.temporary_password),
     is_active: Boolean(user.is_active),
     created_at: user.created_at,
     updated_at: user.updated_at
@@ -256,7 +257,7 @@ export async function adminUpdateUser({ targetUserId, updateData, currentUser })
  */
 export async function setUserPin(userId, newPin, oldPin = null) {
   if (!isValidPin(newPin)) {
-    const err = new Error('PIN must be 4 to 6 numeric digits.');
+    const err = new Error('PIN must be exactly 6 numeric digits.');
     err.statusCode = 400;
     throw err;
   }
@@ -280,7 +281,7 @@ export async function setUserPin(userId, newPin, oldPin = null) {
   }
 
   const pinHash = await hashPin(newPin);
-  await query('UPDATE users SET pin_hash = ?, temporary_password = FALSE WHERE id = ?', [pinHash, userId]);
+  await query('UPDATE users SET pin_hash = ?, temporary_pin = FALSE WHERE id = ?', [pinHash, userId]);
 
   await recordAuditEvent({
     userId,

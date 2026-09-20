@@ -46,24 +46,33 @@ The API server runs by default on `http://localhost:3000` (or `http://192.168.0.
 npm run test:id
 ```
 
-## Default Seed Accounts
-- **Super Admin**: `superadmin` / `SuperAdmin123!`
-- **Admin (Shop 1)**: `admin_tech` / `Admin123!`
-- **Admin (Shop 2)**: `admin_metro` / `Admin123!`
-- **Seller (Shop 1)**: `seller_alice` / `Seller123!`
-- **Seller (Shop 2)**: `seller_charlie` / `Seller123!`
+## 🔑 Authentication & Chosen Seed Credentials
 
-Add the following line directly to your .env file in the root of your backend project folder.
+The system implements a strict, hardened authentication policy across **all user roles**:
+- **Identifier**: Phone Number ONLY (Tanzanian format `07XXXXXXXX` or international E.164 `+255XXXXXXXXX`)
+- **Secret**: Exactly a **6-digit numeric PIN ONLY** (`123456`)
 
-Quick Copy-Paste (Fastest for Prototype)
+| Role | User / Full Name | Phone Number (Local) | Phone Number (E.164) | 6-Digit PIN | Assigned Shop / Scope |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Super Admin** | Alexander Cross (`superadmin`) | `0700 000 001` | `+255700000001` | `123456` | Platform Overseer (`/super-admin`) |
+| **Shop Admin 1** | Marcus Vance (`admin_tech`) | `0712 100 001` | `+255712100001` | `123456` | Kariakoo Tech Hub (`/admin`) |
+| **Shop Admin 2** | Elena Rostova (`admin_metro`) | `0712 100 002` | `+255712100002` | `123456` | Mlimani Boutique (`/admin`) |
+| **POS Seller 1** | Alice Morgan (`seller_alice`) | `0712 200 001` | `+255712200001` | `123456` | Kariakoo Tech Hub (`/seller`) |
+| **POS Seller 2** | Bob Kendrick (`seller_bob`) | `0712 200 002` | `+255712200002` | `123456` | Kariakoo Tech Hub (`/seller`) |
+| **POS Seller 3** | Charlie Dupont (`seller_charlie`) | `0712 200 003` | `+255712200003` | `123456` | Mlimani Boutique (`/seller`) |
 
-Ini, TOML
+### Database Migration & Synchronization
+To apply the database schema, add security tables, and automatically synchronize all seed user credentials to 6-digit PINs, run:
+```bash
+npm run db:migrate
+```
+
+### Environment Security Setup (`.env`)
+Ensure `JWT_SECRET` is defined in your `.env` file:
+```ini
 JWT_SECRET=8f4e9b2c7a1d6f3e5b8c9a2d4f1e7b6c3a5d8f9e2b1c4a7d6f5e8b9c2a1d3f4
-Generate a Custom Key
-If you want to generate your own unique cryptographic string, run this command in your terminal:
-
-Bash
+```
+Or generate a new 256-bit cryptographically secure string:
+```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-Copy the resulting output from the terminal and paste it into your .env file next to JWT_SECRET=.
-
-Once saved, restart your Express server so it loads the new variable into process.env.
+```

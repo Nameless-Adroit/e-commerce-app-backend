@@ -32,41 +32,46 @@ export function getRoleDashboardRedirect(role) {
 /**
  * Authenticates user credentials and establishes an authenticated device session.
  * 
- * Supports:
- *  1. Normal Users (Admin, Seller): Phone Number + PIN
- *  2. Super Admin: Username/Email + Password
- *  3. Backward-compatible bridge for legacy users transitioning to PIN
+ * Strict Single Authentication Scheme:
+ *  - Identifier: Phone Number ONLY (+255XXXXXXXXX or 07XXXXXXXX)
+ *  - Secret: 6-Digit Numeric PIN ONLY
  */
 export async function authenticateUser({
   phoneNumber,
   pin,
   identifier,
-  username,
-  email,
-  password,
+  secret,
   deviceName,
   deviceId,
   ipAddress,
   userAgent
 }) {
-  // 1. Resolve unified login credentials from single login form
-  const rawId = (phoneNumber || identifier || username || email || '').trim();
-  const rawSecret = (pin || password || '').trim();
+  const rawPhone = (phoneNumber || identifier || '').trim();
+  const rawPin = (pin || secret || '').trim();
 
-  if (!rawId || !rawSecret) {
-    const err = new Error('Please provide your login credentials (phone number or username, and PIN or password).');
+  if (!rawPhone || !rawPin) {
+    const err = new Error('Please provide your phone number and 6-digit PIN.');
     err.statusCode = 400;
     throw err;
   }
 
-  const normalizedPhone = normalizePhoneNumber(rawId);
-  const isPhone = normalizedPhone && isValidPhoneNumber(normalizedPhone);
-  const loginIdentifier = isPhone ? normalizedPhone : rawId;
+  const normalizedPhone = normalizePhoneNumber(rawPhone);
+  if (!normalizedPhone || !isValidPhoneNumber(normalizedPhone)) {
+    const err = new Error('Invalid phone number format. Please enter a valid phone number (e.g. 0712 100 001 or +255712100001).');
+    err.statusCode = 400;
+    throw err;
+  }
 
-  // 1. Enforce brute-force lockout check
-  await checkBruteForceLockout(loginIdentifier, ipAddress);
+  if (!isValidPin(rawPin)) {
+    const err = new Error('Invalid PIN. PIN must be exactly 6 numeric digits.');
+    err.statusCode = 400;
+    throw err;
+  }
 
-  // 2. Query user by phone_number, username, or email
+  // 1. Enforce brute-force lockout check on phone number & IP
+  await checkBruteForceLockout(normalizedPhone, ipAddress);
+
+  // 2. Query user strictly by phone_number
   const users = await query(
     `SELECT u.*, 
             b.name as business_name, b.business_code, b.currency_code as business_currency, 
@@ -77,33 +82,32 @@ export async function authenticateUser({
      FROM users u 
      LEFT JOIN businesses b ON u.business_id = b.id
      LEFT JOIN shops s ON u.shop_id = s.id 
-     WHERE (u.phone_number = ? OR u.username = ? OR u.email = ?) LIMIT 1`,
-    [normalizedPhone || rawId, rawId, rawId]
+     WHERE u.phone_number = ? LIMIT 1`,
+    [normalizedPhone]
   );
 
   if (!users || users.length === 0) {
-    await handleFailedLoginAttempt({ identifier: loginIdentifier, ipAddress, userAgent });
-    const err = new Error('Invalid credentials. Please verify your phone number/username and secret.');
+    await handleFailedLoginAttempt({ identifier: normalizedPhone, ipAddress, userAgent });
+    const err = new Error('Invalid credentials. Please verify your phone number and 6-digit PIN.');
     err.statusCode = 401;
     throw err;
   }
 
   const user = users[0];
 
-  // 3. Verify credentials against either PIN hash or password hash
-  let isMatch = false;
-
-  if (user.pin_hash && isValidPin(rawSecret)) {
-    isMatch = await verifyPin(rawSecret, user.pin_hash);
+  // 3. Verify credentials strictly against 6-digit PIN hash
+  if (!user.pin_hash) {
+    await handleFailedLoginAttempt({ identifier: normalizedPhone, ipAddress, userAgent });
+    const err = new Error('No PIN is configured for this account. Please contact your system administrator.');
+    err.statusCode = 401;
+    throw err;
   }
 
-  if (!isMatch && user.password_hash) {
-    isMatch = await bcrypt.compare(rawSecret, user.password_hash);
-  }
+  const isMatch = await verifyPin(rawPin, user.pin_hash);
 
   if (!isMatch) {
-    await handleFailedLoginAttempt({ identifier: loginIdentifier, ipAddress, userAgent });
-    const err = new Error('Invalid credentials. Please verify your phone number/username and PIN/password.');
+    await handleFailedLoginAttempt({ identifier: normalizedPhone, ipAddress, userAgent });
+    const err = new Error('Invalid credentials. Please verify your phone number and 6-digit PIN.');
     err.statusCode = 401;
     throw err;
   }
@@ -173,10 +177,9 @@ export async function authenticateUser({
       shop_name: user.shop_name || null,
       shop_code: user.shop_code || null,
       shop_currency: currencyCode,
-      shop_currency_symbol: currencySymbol,
-      shop_currency_name: currencyName,
-      temporary_password: Boolean(user.temporary_password),
-      requires_pin_setup: !user.pin_hash && user.role !== ROLES.SUPER_ADMIN
+      temporary_pin: Boolean(user.temporary_pin ?? user.temporary_password),
+      temporary_password: Boolean(user.temporary_pin ?? user.temporary_password),
+      requires_pin_setup: !user.pin_hash
     }
   };
 }
@@ -250,7 +253,7 @@ export async function registerUser({ currentUser, userData }) {
 
   let assignedBusinessId = null;
   let assignedShopId = null;
-  let isTempPassword = false;
+  let isTempPin = false;
 
   // Role hierarchy permission checks
   if (currentUser.role === ROLES.ADMIN) {
@@ -275,6 +278,7 @@ export async function registerUser({ currentUser, userData }) {
       throw err;
     }
     assignedShopId = parseInt(shop_id, 10);
+    isTempPin = true;
   } else if (currentUser.role === ROLES.SUPER_ADMIN) {
     if (role === ROLES.ADMIN) {
       if (!business_id) {
@@ -284,7 +288,7 @@ export async function registerUser({ currentUser, userData }) {
       }
       assignedBusinessId = parseInt(business_id, 10);
       assignedShopId = null;
-      isTempPassword = true;
+      isTempPin = true;
     } else if (role === ROLES.SELLER) {
       if (!shop_id) {
         const err = new Error('A shop_id must be provided when registering a Seller.');
@@ -299,6 +303,10 @@ export async function registerUser({ currentUser, userData }) {
       }
       assignedShopId = shops[0].id;
       assignedBusinessId = shops[0].business_id;
+      isTempPin = true;
+    } else if (role === ROLES.SUPER_ADMIN) {
+      // Super Admin provisioning another Super Admin
+      isTempPin = true;
     }
   } else {
     const err = new Error('Forbidden: Unauthorized to create users.');
@@ -318,31 +326,25 @@ export async function registerUser({ currentUser, userData }) {
     throw err;
   }
 
-  // Generate hashes
-  const initialPassword = password || 'TempPass123!';
-  const salt = await bcrypt.genSalt(10);
-  const passwordHash = await bcrypt.hash(initialPassword, salt);
-
   let pinHash = null;
   if (pin && isValidPin(pin)) {
     pinHash = await hashPin(pin);
-  } else if (role !== ROLES.SUPER_ADMIN) {
-    // Default PIN for new staff is '1234'
-    pinHash = await hashPin('1234');
+  } else {
+    // Default 6-digit PIN for new user is '123456'
+    pinHash = await hashPin('123456');
   }
 
   const result = await query(
     `INSERT INTO users 
-      (username, email, phone_number, password_hash, pin_hash, profile_image, temporary_password, role, business_id, shop_id, full_name, is_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)`,
+      (username, email, phone_number, pin_hash, profile_image, temporary_pin, role, business_id, shop_id, full_name, is_active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)`,
     [
       username.trim(),
       email.trim(),
       normalizedPhone,
-      passwordHash,
       pinHash,
       profile_image || null,
-      isTempPassword ? 1 : 0,
+      isTempPin ? 1 : 0,
       role,
       assignedBusinessId,
       assignedShopId,
@@ -376,7 +378,8 @@ export async function registerUser({ currentUser, userData }) {
     business_id: assignedBusinessId,
     shop_id: assignedShopId,
     full_name: full_name.trim(),
-    temporary_password: isTempPassword
+    temporary_pin: isTempPin,
+    temporary_password: isTempPin
   };
 }
 

@@ -70,11 +70,10 @@ CREATE TABLE `users` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
   `username` VARCHAR(50) NOT NULL UNIQUE,
   `email` VARCHAR(100) NOT NULL UNIQUE,
-  `phone_number` VARCHAR(20) NULL UNIQUE COMMENT 'Normalized E.164 phone (+255XXXXXXXXX) for Admin/Seller login',
-  `password_hash` VARCHAR(255) NOT NULL COMMENT 'Bcrypt hash for Super Admin or legacy fallback',
-  `pin_hash` VARCHAR(255) NULL COMMENT 'Bcrypt hash of 4-6 digit staff PIN',
+  `phone_number` VARCHAR(20) NULL UNIQUE COMMENT 'Normalized E.164 phone (+255XXXXXXXXX) for login',
+  `pin_hash` VARCHAR(255) NOT NULL COMMENT 'Bcrypt hash of 6-digit staff/admin PIN',
   `profile_image` VARCHAR(500) NULL COMMENT 'URL or asset path of profile image',
-  `temporary_password` BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'Flags if user must change credentials on first login',
+  `temporary_pin` BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'Flags if user must change PIN on first login',
   `failed_login_attempts` INT NOT NULL DEFAULT 0 COMMENT 'Counter for brute-force mitigation',
   `locked_until` DATETIME NULL COMMENT 'Lockout expiration timestamp',
   `role` ENUM('super_admin', 'admin', 'seller') NOT NULL,
@@ -258,3 +257,26 @@ CREATE TABLE `audit_logs` (
   INDEX `idx_audit_created` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- -----------------------------------------------------------------------------
+-- 11. SHOP_REQUESTS TABLE (Branch Store Creation Requests & Super Admin Approvals)
+-- -----------------------------------------------------------------------------
+CREATE TABLE `shop_requests` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `business_id` INT NOT NULL,
+  `requested_by_user_id` INT NOT NULL,
+  `shop_code` VARCHAR(20) NOT NULL,
+  `name` VARCHAR(100) NOT NULL,
+  `address` VARCHAR(255) NULL,
+  `phone` VARCHAR(20) NULL,
+  `status` ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+  `admin_notes` TEXT NULL,
+  `super_admin_notes` TEXT NULL,
+  `reviewed_by_user_id` INT NULL,
+  `created_shop_id` INT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `reviewed_at` DATETIME NULL,
+  CONSTRAINT `fk_shop_req_business` FOREIGN KEY (`business_id`) REFERENCES `businesses` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_shop_req_user` FOREIGN KEY (`requested_by_user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  INDEX `idx_shop_req_status` (`status`),
+  INDEX `idx_shop_req_business` (`business_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -9,24 +9,24 @@ const router = express.Router();
 router.use(authenticateToken);
 router.use(enforceShopScope);
 
-// 1. Scan product ID using camera / barcode reader (SRS 3.3)
+// 1. Scan product ID using camera / barcode reader (SRS 3.3) - Sellers only
 router.get(
   '/scan/:id',
-  authorize([ROLES.SELLER, ROLES.ADMIN, ROLES.SUPER_ADMIN]),
+  authorize([ROLES.SELLER]),
   posController.scanProduct
 );
 
-// 2. Checkout transaction and deduct units (SRS 3.3)
+// 2. Checkout transaction and deduct units (SRS 3.3) - Sellers only
 router.post(
   '/checkout',
-  authorize([ROLES.SELLER, ROLES.ADMIN, ROLES.SUPER_ADMIN]),
+  authorize([ROLES.SELLER]),
   posController.checkout
 );
 
-// 3. Process customer return transaction (Prompt Section 5)
+// 3. Process customer return transaction (Prompt Section 5) - Sellers only
 router.post(
   '/return',
-  authorize([ROLES.SELLER, ROLES.ADMIN, ROLES.SUPER_ADMIN]),
+  authorize([ROLES.SELLER]),
   posController.processReturn
 );
 

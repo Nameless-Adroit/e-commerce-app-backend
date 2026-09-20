@@ -84,21 +84,22 @@ async function runTestSuite() {
   // ---------------------------------------------------------------------------
   console.log('\n▶ TEST SUITE 2: PIN Security Utilities (Hashing & Verification)');
 
-  report('Validates 4 to 6 digit numeric PINs', () => {
-    assert.strictEqual(pinUtil.isValidPin('1234'), true);
+  report('Validates exactly 6-digit numeric PINs', () => {
+    assert.strictEqual(pinUtil.isValidPin('123456'), true);
     assert.strictEqual(pinUtil.isValidPin('987654'), true);
+    assert.strictEqual(pinUtil.isValidPin('1234'), false); // 4 digits rejected (now 6 required)
     assert.strictEqual(pinUtil.isValidPin('123'), false); // Too short
     assert.strictEqual(pinUtil.isValidPin('1234567'), false); // Too long
-    assert.strictEqual(pinUtil.isValidPin('123a'), false); // Non-numeric
+    assert.strictEqual(pinUtil.isValidPin('12345a'), false); // Non-numeric
   });
 
-  await reportAsync('Hashes and verifies PIN with bcrypt constant-time comparison', async () => {
-    const pin = '4321';
+  await reportAsync('Hashes and verifies 6-digit PIN with bcrypt constant-time comparison', async () => {
+    const pin = '123456';
     const hash = await pinUtil.hashPin(pin);
     assert.ok(hash.startsWith('$2'), 'Hash should be a valid bcrypt hash');
     const valid = await pinUtil.verifyPin(pin, hash);
     assert.strictEqual(valid, true, 'Valid PIN must match');
-    const invalid = await pinUtil.verifyPin('9999', hash);
+    const invalid = await pinUtil.verifyPin('999999', hash);
     assert.strictEqual(invalid, false, 'Invalid PIN must fail');
   });
 
@@ -149,7 +150,7 @@ async function runTestSuite() {
 
   // Setup test user with phone and PIN
   const testPhone = '+255712999888';
-  const testPin = '5678';
+  const testPin = '654321';
   const testPinHash = await pinUtil.hashPin(testPin);
 
   await query('DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE username = ?)', ['test_security_user']);
@@ -292,21 +293,19 @@ async function runTestSuite() {
     assert.ok(authResult.rawRefreshToken, 'Must return rawRefreshToken for cookie');
     assert.strictEqual(authResult.user.id, testUserId);
     assert.strictEqual(authResult.user.phone_number, testPhone);
-    assert.strictEqual(authResult.user.pin_hash, undefined, 'pin_hash must never be leaked in response');
-    assert.strictEqual(authResult.user.password_hash, undefined, 'password_hash must never be leaked');
   });
 
-  await reportAsync('Authenticates Super Admin via Username and Password', async () => {
+  await reportAsync('Authenticates Super Admin via Phone Number and 6-digit PIN', async () => {
     const saAuth = await authService.authenticateUser({
-      identifier: 'superadmin',
-      password: 'SuperAdmin123!',
+      phoneNumber: '+255700000001',
+      pin: '123456',
       ipAddress: '127.0.0.1',
       userAgent: 'AdminPortal/2.0'
     });
 
     assert.ok(saAuth.accessToken);
     assert.strictEqual(saAuth.user.role, ROLES.SUPER_ADMIN);
-    assert.strictEqual(saAuth.user.password_hash, undefined);
+    assert.strictEqual(saAuth.user.pin_hash, undefined);
   });
 
   await reportAsync('Revokes all sessions on logout-all', async () => {

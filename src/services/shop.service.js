@@ -55,9 +55,15 @@ export async function getAllShops({ currentUser, businessId }) {
 }
 
 /**
- * Create a new shop under a Business (Admin for own business, or Super Admin for any business)
+ * Create a new shop under a Business (Super Admin only)
  */
 export async function createShop({ currentUser, shopData }) {
+  if (currentUser.role !== ROLES.SUPER_ADMIN) {
+    const err = new Error('Direct store creation is restricted to Super Admins. Store Admins must submit a store request for approval.');
+    err.statusCode = 403;
+    throw err;
+  }
+
   const { shop_code, name, address, phone, business_id } = shopData;
 
   if (!shop_code || !name) {
@@ -66,18 +72,7 @@ export async function createShop({ currentUser, shopData }) {
     throw err;
   }
 
-  // Determine target business ID
-  let targetBusinessId;
-  if (currentUser.role === ROLES.ADMIN) {
-    targetBusinessId = currentUser.business_id;
-  } else if (currentUser.role === ROLES.SUPER_ADMIN) {
-    targetBusinessId = business_id || currentUser.business_id;
-  } else {
-    const err = new Error('Only Admins and Super Admins can create shops.');
-    err.statusCode = 403;
-    throw err;
-  }
-
+  const targetBusinessId = business_id || currentUser.business_id;
   if (!targetBusinessId) {
     const err = new Error('A parent business_id is required to create a shop.');
     err.statusCode = 400;
@@ -123,6 +118,230 @@ export async function createShop({ currentUser, shopData }) {
     currency_code: currencyCode,
     currency_symbol: currencySymbol,
     currency_name: currencyName
+  };
+}
+
+/**
+ * Submit a request to add a new shop branch (Admin)
+ */
+export async function submitShopRequest({ currentUser, requestData }) {
+  if (currentUser.role !== ROLES.ADMIN && currentUser.role !== ROLES.SUPER_ADMIN) {
+    const err = new Error('Only Store Admins can submit store creation requests.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const { shop_code, name, address, phone, admin_notes } = requestData;
+
+  if (!shop_code || !name) {
+    const err = new Error('Shop code (e.g. SHP02) and shop display name are required.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const businessId = currentUser.business_id || requestData.business_id;
+  if (!businessId) {
+    const err = new Error('Business identifier is required.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const cleanCode = shop_code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+  // Check existing shops
+  const existingShop = await query('SELECT id FROM shops WHERE shop_code = ? LIMIT 1', [cleanCode]);
+  if (existingShop && existingShop.length > 0) {
+    const err = new Error(`Shop code '${cleanCode}' is already registered.`);
+    err.statusCode = 409;
+    throw err;
+  }
+
+  // Check existing pending requests
+  const existingReq = await query(
+    "SELECT id FROM shop_requests WHERE shop_code = ? AND status = 'pending' LIMIT 1",
+    [cleanCode]
+  );
+  if (existingReq && existingReq.length > 0) {
+    const err = new Error(`A pending request for shop code '${cleanCode}' is already awaiting review.`);
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const result = await query(
+    `INSERT INTO shop_requests (business_id, requested_by_user_id, shop_code, name, address, phone, admin_notes, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
+    [businessId, currentUser.id, cleanCode, name.trim(), address || null, phone || null, admin_notes || null]
+  );
+
+  return {
+    id: result.insertId,
+    business_id: businessId,
+    requested_by_user_id: currentUser.id,
+    shop_code: cleanCode,
+    name: name.trim(),
+    address: address || null,
+    phone: phone || null,
+    admin_notes: admin_notes || null,
+    status: 'pending'
+  };
+}
+
+/**
+ * List shop requests:
+ * - Admin: requests belonging to own business
+ * - Super Admin: all requests across platform
+ */
+export async function getShopRequests({ currentUser, status }) {
+  let whereClauses = [];
+  let params = [];
+
+  if (currentUser.role === ROLES.ADMIN) {
+    whereClauses.push('sr.business_id = ?');
+    params.push(currentUser.business_id);
+  }
+
+  if (status) {
+    whereClauses.push('sr.status = ?');
+    params.push(status);
+  }
+
+  const whereStr = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+  const sql = `
+    SELECT sr.*,
+      b.name as business_name,
+      b.business_code,
+      u_req.full_name as requested_by_name,
+      u_req.phone_number as requested_by_phone,
+      u_rev.full_name as reviewed_by_name
+    FROM shop_requests sr
+    JOIN businesses b ON sr.business_id = b.id
+    JOIN users u_req ON sr.requested_by_user_id = u_req.id
+    LEFT JOIN users u_rev ON sr.reviewed_by_user_id = u_rev.id
+    ${whereStr}
+    ORDER BY sr.id DESC
+  `;
+
+  return await query(sql, params);
+}
+
+/**
+ * Approve a shop request and instantiate the new shop (Super Admin only)
+ */
+export async function approveShopRequest({ currentUser, requestId, superAdminNotes }) {
+  if (currentUser.role !== ROLES.SUPER_ADMIN) {
+    const err = new Error('Only Super Admins can approve shop requests.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const requests = await query('SELECT * FROM shop_requests WHERE id = ? LIMIT 1', [requestId]);
+  if (!requests || requests.length === 0) {
+    const err = new Error('Shop request not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const reqRow = requests[0];
+  if (reqRow.status !== 'pending') {
+    const err = new Error(`Request cannot be approved because its current status is '${reqRow.status}'.`);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Fetch business for currency inheritance
+  const businesses = await query('SELECT * FROM businesses WHERE id = ? LIMIT 1', [reqRow.business_id]);
+  if (!businesses || businesses.length === 0) {
+    const err = new Error('Associated business not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  const business = businesses[0];
+
+  // Verify shop_code uniqueness in shops table
+  const existingShop = await query('SELECT id FROM shops WHERE shop_code = ? LIMIT 1', [reqRow.shop_code]);
+  if (existingShop && existingShop.length > 0) {
+    const err = new Error(`Cannot approve: Shop code '${reqRow.shop_code}' is already active.`);
+    err.statusCode = 409;
+    throw err;
+  }
+
+  // Instantiate shop
+  const createResult = await query(
+    `INSERT INTO shops (business_id, shop_code, name, address, phone, currency_code, currency_symbol, currency_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      reqRow.business_id,
+      reqRow.shop_code,
+      reqRow.name,
+      reqRow.address || null,
+      reqRow.phone || null,
+      business.currency_code || 'TZS',
+      business.currency_symbol || 'TSh',
+      business.currency_name || 'Tanzanian Shilling'
+    ]
+  );
+
+  const newShopId = createResult.insertId;
+
+  // Update request record
+  await query(
+    `UPDATE shop_requests 
+     SET status = 'approved',
+         reviewed_by_user_id = ?,
+         super_admin_notes = ?,
+         created_shop_id = ?,
+         reviewed_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [currentUser.id, superAdminNotes || null, newShopId, requestId]
+  );
+
+  return {
+    success: true,
+    message: `Shop request approved successfully. Store '${reqRow.name}' (${reqRow.shop_code}) is now active.`,
+    shop_id: newShopId,
+    request_id: requestId
+  };
+}
+
+/**
+ * Reject a shop request (Super Admin only)
+ */
+export async function rejectShopRequest({ currentUser, requestId, superAdminNotes }) {
+  if (currentUser.role !== ROLES.SUPER_ADMIN) {
+    const err = new Error('Only Super Admins can reject shop requests.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const requests = await query('SELECT * FROM shop_requests WHERE id = ? LIMIT 1', [requestId]);
+  if (!requests || requests.length === 0) {
+    const err = new Error('Shop request not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const reqRow = requests[0];
+  if (reqRow.status !== 'pending') {
+    const err = new Error(`Request cannot be rejected because its current status is '${reqRow.status}'.`);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  await query(
+    `UPDATE shop_requests 
+     SET status = 'rejected',
+         reviewed_by_user_id = ?,
+         super_admin_notes = ?,
+         reviewed_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [currentUser.id, superAdminNotes || null, requestId]
+  );
+
+  return {
+    success: true,
+    message: 'Shop request has been rejected.',
+    request_id: requestId
   };
 }
 
@@ -185,5 +404,10 @@ export async function getShopById(shopId, currentUser) {
 export default {
   getAllShops,
   createShop,
+  submitShopRequest,
+  getShopRequests,
+  approveShopRequest,
+  rejectShopRequest,
   getShopById
 };
+

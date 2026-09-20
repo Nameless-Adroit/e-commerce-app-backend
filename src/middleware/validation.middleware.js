@@ -8,31 +8,41 @@ import { ROLES } from '../config/constants.js';
 
 /**
  * Validates Login payload:
- * Accepts either:
- *  - { phoneNumber, pin } for Store Admin & Seller
- *  - { identifier, password } for Super Admin
+ * Strictly enforces:
+ *  - phoneNumber: Valid E.164 phone number (+255XXXXXXXXX or 07XXXXXXXX)
+ *  - pin: Exactly 6 numeric digits
  */
 export function validateLoginPayload(req, res, next) {
-  const { phoneNumber, pin, identifier, password, username, email } = req.body;
+  const { phoneNumber, pin, identifier, secret } = req.body;
 
-  const rawId = (phoneNumber || identifier || username || email || '').trim();
-  const rawSecret = (pin || password || '').trim();
+  const rawPhone = (phoneNumber || identifier || '').trim();
+  const rawPin = (pin || secret || '').trim();
 
-  if (!rawId || !rawSecret) {
+  if (!rawPhone || !rawPin) {
     return res.status(400).json({
       success: false,
-      message: 'Credentials required. Please enter your phone number or username, and PIN or password.'
+      message: 'Please provide your phone number and 6-digit PIN.'
     });
   }
 
-  // Check if it's formatted as a phone number
-  const normalized = normalizePhoneNumber(rawId);
-  if (normalized && isValidPhoneNumber(normalized)) {
-    req.body.normalizedPhone = normalized;
+  const normalized = normalizePhoneNumber(rawPhone);
+  if (!normalized || !isValidPhoneNumber(normalized)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid phone number format. Please provide a valid phone number (e.g. 0712 100 001 or +255712100001).'
+    });
   }
 
-  req.body.loginIdentifier = rawId;
-  req.body.loginSecret = rawSecret;
+  if (!isValidPin(rawPin)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid PIN. PIN must be exactly 6 numeric digits.'
+    });
+  }
+
+  req.body.normalizedPhone = normalized;
+  req.body.phoneNumber = normalized;
+  req.body.pin = rawPin;
   next();
 }
 
@@ -46,14 +56,14 @@ export function validatePinPayload(req, res, next) {
   if (!targetPin || !isValidPin(targetPin)) {
     return res.status(400).json({
       success: false,
-      message: 'Invalid PIN. PIN must be between 4 and 6 numeric digits.'
+      message: 'Invalid PIN. PIN must be exactly 6 numeric digits.'
     });
   }
 
   if (oldPin && !isValidPin(oldPin)) {
     return res.status(400).json({
       success: false,
-      message: 'Invalid current PIN.'
+      message: 'Invalid current PIN. PIN must be exactly 6 numeric digits.'
     });
   }
 

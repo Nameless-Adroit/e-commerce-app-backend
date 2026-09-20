@@ -15,14 +15,43 @@ router.get(
   shopController.getAllShops
 );
 
-// 2. Create new shop (Super Admin for any business, Admin for own business)
+// 2. Shop requests workflow
+// Submit new shop request (Admin only)
+router.post(
+  '/requests',
+  authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]),
+  shopController.submitShopRequest
+);
+
+// List shop requests (Admin sees own business requests, Super Admin sees all)
+router.get(
+  '/requests',
+  authorize([ROLES.SUPER_ADMIN, ROLES.ADMIN]),
+  shopController.getShopRequests
+);
+
+// Approve shop request (Super Admin only)
+router.post(
+  '/requests/:id/approve',
+  authorize([ROLES.SUPER_ADMIN]),
+  shopController.approveShopRequest
+);
+
+// Reject shop request (Super Admin only)
+router.post(
+  '/requests/:id/reject',
+  authorize([ROLES.SUPER_ADMIN]),
+  shopController.rejectShopRequest
+);
+
+// 3. Direct create shop (Super Admin only)
 router.post(
   '/',
-  authorize([ROLES.SUPER_ADMIN, ROLES.ADMIN]),
+  authorize([ROLES.SUPER_ADMIN]),
   shopController.createShop
 );
 
-// 3. Get shop details (Scoped to business / shop)
+// 4. Get shop details (Scoped to business / shop)
 router.get(
   '/:id',
   authorize([ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SELLER]),
@@ -30,3 +59,4 @@ router.get(
 );
 
 export default router;
+
