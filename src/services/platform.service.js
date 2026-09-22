@@ -5,7 +5,7 @@
 import { query, executeTransaction } from '../config/database.config.js';
 import { recordAuditEvent } from './audit.service.js';
 import { notifyBusinessApproved, notifyBusinessDeclined } from './notification.service.js';
-import { listPlans, calculateRenewalDates } from './subscription.service.js';
+import { listPlans, calculateRenewalDates, calculateDaysRemaining, getExpiryWarningLevel } from './subscription.service.js';
 import { ROLES } from '../config/constants.js';
 
 // -----------------------------------------------------------------------------
@@ -469,8 +469,37 @@ export async function getPlatformDashboardMetrics() {
     FROM businesses 
     WHERE subscription_status = 'active' 
       AND subscription_end_date IS NOT NULL 
-      AND subscription_end_date BETWEEN NOW() AND DATE_ADD(NOW(), INTERVAL 7 DAY)
+      AND subscription_end_date BETWEEN NOW() AND DATE_ADD(NOW(), INTERVAL 30 DAY)
   `);
+
+  // Active shops & sellers counts
+  const [activeShopsRows] = await query("SELECT COUNT(*) as count FROM shops WHERE is_active = TRUE").catch(() => [{ count: 0 }]);
+  const [activeSellersRows] = await query("SELECT COUNT(*) as count FROM users WHERE role = 'seller' AND is_active = TRUE").catch(() => [{ count: 0 }]);
+
+  // Expiring businesses (<= 30 days or already expired)
+  const expiringBusinessesRows = await query(`
+    SELECT b.id, b.name, b.business_code, b.subscription_status, b.subscription_end_date, p.name as plan_name
+    FROM businesses b
+    LEFT JOIN subscription_plans p ON b.subscription_plan_id = p.id
+    WHERE b.subscription_status IN ('active', 'expired') 
+       OR (b.subscription_end_date IS NOT NULL AND b.subscription_end_date <= DATE_ADD(NOW(), INTERVAL 30 DAY))
+    ORDER BY b.subscription_end_date ASC
+    LIMIT 20
+  `).catch(() => []);
+
+  const expiring_businesses = (expiringBusinessesRows || []).map((b) => {
+    const daysRemaining = calculateDaysRemaining(b.subscription_end_date);
+    const warningLevel = getExpiryWarningLevel(daysRemaining, b.subscription_status);
+    return {
+      id: b.id,
+      name: b.name,
+      business_code: b.business_code,
+      subscription_end_date: b.subscription_end_date,
+      days_remaining: daysRemaining,
+      warning_level: warningLevel,
+      plan_name: b.plan_name || 'Retail Plan'
+    };
+  });
 
   // Recent payments
   const recentPayments = await query(`
@@ -481,7 +510,7 @@ export async function getPlatformDashboardMetrics() {
     LEFT JOIN users u ON sp.recorded_by_user_id = u.id
     ORDER BY sp.created_at DESC
     LIMIT 5
-  `);
+  `).catch(() => []);
 
   // Recent registrations
   const recentRegistrations = await query(`
@@ -491,16 +520,39 @@ export async function getPlatformDashboardMetrics() {
     LEFT JOIN subscription_plans p ON b.subscription_plan_id = p.id
     ORDER BY b.created_at DESC
     LIMIT 5
-  `);
+  `).catch(() => []);
+
+  const totalBusinesses = parseInt(totalBizRows[0]?.count || 0, 10);
+  const activeBusinesses = parseInt(activeBizRows[0]?.count || 0, 10);
+  const pendingRegistrations = parseInt(pendingReqRows[0]?.count || 0, 10);
+  const expiredBusinesses = parseInt(expiredBizRows[0]?.count || 0, 10);
+  const expiringSoonCount = parseInt(expiringSoonRows[0]?.count || 0, 10);
+  const totalRevenue = parseFloat(revenueRows[0]?.total || 0);
+  const totalActiveShops = parseInt(activeShopsRows[0]?.count || 0, 10);
+  const totalActiveSellers = parseInt(activeSellersRows[0]?.count || 0, 10);
 
   return {
-    totalBusinesses: parseInt(totalBizRows[0]?.count || 0, 10),
-    activeBusinesses: parseInt(activeBizRows[0]?.count || 0, 10),
-    pendingRegistrations: parseInt(pendingReqRows[0]?.count || 0, 10),
-    expiredBusinesses: parseInt(expiredBizRows[0]?.count || 0, 10),
-    expiringSoonCount: parseInt(expiringSoonRows[0]?.count || 0, 10),
-    totalRevenue: parseFloat(revenueRows[0]?.total || 0),
+    total_businesses: totalBusinesses,
+    totalBusinesses,
+    active_subscriptions: activeBusinesses,
+    activeBusinesses,
+    pending_registrations: pendingRegistrations,
+    pendingRegistrations,
+    expired_count: expiredBusinesses,
+    expiredBusinesses,
+    expiring_soon_count: expiringSoonCount,
+    expiringSoonCount,
+    total_revenue_tzs: totalRevenue,
+    totalRevenue,
+    total_active_shops: totalActiveShops,
+    totalActiveShops,
+    total_active_sellers: totalActiveSellers,
+    totalActiveSellers,
+    expiring_businesses,
+    expiringBusinesses: expiring_businesses,
+    recent_payments: recentPayments.map(p => ({ ...p, amount: parseFloat(p.amount) })),
     recentPayments: recentPayments.map(p => ({ ...p, amount: parseFloat(p.amount) })),
+    recent_registrations: recentRegistrations,
     recentRegistrations
   };
 }
