@@ -1,6 +1,7 @@
 import { query } from '../config/database.config.js';
 import { ROLES, BUSINESS_STATUS } from '../config/constants.js';
 import { verifyAccessToken } from '../utils/token.util.js';
+import { recordSecurityEvent } from '../services/security.service.js';
 
 /**
  * Middleware: Verifies 15-minute Access Token, checks session revocation, and attaches user to request
@@ -17,10 +18,17 @@ export async function authenticateToken(req, res, next) {
   }
 
   if (!token) {
+    recordSecurityEvent({
+      eventType: 'AUTH_TOKEN_MISSING',
+      ipAddress: req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress || null,
+      userAgent: req.headers['user-agent'] || null,
+      details: { path: req.originalUrl, method: req.method }
+    }).catch(() => {});
+
     return res.status(401).json({
       success: false,
-      code: 'TOKEN_MISSING',
-      message: 'Access denied. No authorization token provided.'
+      code: 'UNAUTHENTICATED',
+      message: 'Authentication required. Please sign in to continue.'
     });
   }
 
@@ -34,10 +42,18 @@ export async function authenticateToken(req, res, next) {
         [decoded.session_id]
       );
       if (sessions.length > 0 && sessions[0].is_revoked) {
+        recordSecurityEvent({
+          eventType: 'SESSION_REVOKED_ACCESS',
+          userId: decoded.id,
+          ipAddress: req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress || null,
+          userAgent: req.headers['user-agent'] || null,
+          details: { sessionId: decoded.session_id, path: req.originalUrl }
+        }).catch(() => {});
+
         return res.status(401).json({
           success: false,
-          code: 'SESSION_REVOKED',
-          message: 'This session has been revoked. Please sign in again.'
+          code: 'SESSION_EXPIRED',
+          message: 'Your session has expired. Please sign in again.'
         });
       }
     }
@@ -126,10 +142,17 @@ export async function authenticateToken(req, res, next) {
     next();
   } catch (err) {
     const isExpired = err.name === 'TokenExpiredError';
+    recordSecurityEvent({
+      eventType: isExpired ? 'TOKEN_EXPIRED' : 'TOKEN_INVALID',
+      ipAddress: req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress || null,
+      userAgent: req.headers['user-agent'] || null,
+      details: { errorName: err.name, errorMessage: err.message, path: req.originalUrl }
+    }).catch(() => {});
+
     return res.status(401).json({
       success: false,
-      code: isExpired ? 'TOKEN_EXPIRED' : 'TOKEN_INVALID',
-      message: isExpired ? 'Access token expired.' : 'Invalid authentication token.'
+      code: isExpired ? 'TOKEN_EXPIRED' : 'UNAUTHENTICATED',
+      message: 'Your session has expired. Please sign in to continue.'
     });
   }
 }

@@ -56,8 +56,8 @@ export async function login(req, res, next) {
 export async function refresh(req, res, next) {
   try {
     const { ipAddress, userAgent } = getClientContext(req);
-    // Read refresh token from HTTP-only cookie, or fallback to header
-    const rawRefreshToken = req.cookies?.refreshToken || req.headers['x-refresh-token'];
+    // Read refresh token from HTTP-only cookie, fallback to header, or JSON payload
+    const rawRefreshToken = req.cookies?.refreshToken || req.headers['x-refresh-token'] || req.body?.refreshToken;
 
     if (!rawRefreshToken) {
       return res.status(401).json({
@@ -82,6 +82,8 @@ export async function refresh(req, res, next) {
       message: 'Token refreshed successfully.',
       data: {
         token: result.accessToken,
+        accessToken: result.accessToken,
+        refreshToken: result.newRawRefreshToken,
         sessionId: result.sessionId
       }
     });

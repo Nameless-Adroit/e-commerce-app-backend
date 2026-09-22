@@ -52,11 +52,58 @@ export async function platformLogin(req, res, next) {
       message: 'Platform Owner authenticated successfully.',
       data: {
         token: result.accessToken,
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
         sessionId: result.sessionId,
         user: result.user
       }
     });
   } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Dedicated Platform Owner Token Refresh (rotates Refresh Token and issues new 15-min Access Token)
+ */
+export async function platformRefresh(req, res, next) {
+  try {
+    const ipAddress = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress || null;
+    const userAgent = req.headers['user-agent'] || null;
+    const rawRefreshToken = req.cookies?.refreshToken || req.headers['x-refresh-token'] || req.body?.refreshToken;
+
+    if (!rawRefreshToken) {
+      return res.status(401).json({
+        success: false,
+        code: 'REFRESH_TOKEN_MISSING',
+        message: 'No refresh token session found. Please sign in.'
+      });
+    }
+
+    const result = await authService.refreshAccessToken({
+      rawRefreshToken,
+      ipAddress,
+      userAgent
+    });
+
+    if (res.setRefreshCookie) {
+      res.setRefreshCookie(result.newRawRefreshToken, result.expiresAt);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Token refreshed successfully.',
+      data: {
+        token: result.accessToken,
+        accessToken: result.accessToken,
+        refreshToken: result.newRawRefreshToken,
+        sessionId: result.sessionId
+      }
+    });
+  } catch (err) {
+    if (res.clearRefreshCookie) {
+      res.clearRefreshCookie();
+    }
     next(err);
   }
 }

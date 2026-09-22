@@ -15,10 +15,11 @@ const router = express.Router();
 router.get('/config', platformController.getPublicConfig);
 
 // -----------------------------------------------------------------------------
-// 2. Dedicated Platform Owner Login
+// 2. Dedicated Platform Owner Login & Token Refresh
 // -----------------------------------------------------------------------------
 // Enforces rate limiting and strictly verifies Super Admin role
 router.post('/auth/login', authRateLimiter, platformController.platformLogin);
+router.post('/auth/refresh', authRateLimiter, platformController.platformRefresh);
 
 // -----------------------------------------------------------------------------
 // 3. Protected Platform Owner Operations (All require token & Platform Owner role)
