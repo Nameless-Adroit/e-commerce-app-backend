@@ -22,10 +22,29 @@ DROP TABLE IF EXISTS `audit_logs`;
 DROP TABLE IF EXISTS `security_logs`;
 DROP TABLE IF EXISTS `sessions`;
 DROP TABLE IF EXISTS `users`;
+DROP TABLE IF EXISTS `subscription_plans`;
 DROP TABLE IF EXISTS `shops`;
 DROP TABLE IF EXISTS `businesses`;
 
 SET FOREIGN_KEY_CHECKS = 1;
+
+-- -----------------------------------------------------------------------------
+-- 0. SUBSCRIPTION_PLANS TABLE (Platform Tier Definitions)
+-- -----------------------------------------------------------------------------
+CREATE TABLE `subscription_plans` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `plan_code` VARCHAR(50) NOT NULL UNIQUE,
+  `name` VARCHAR(100) NOT NULL,
+  `price` DECIMAL(12, 2) NOT NULL,
+  `billing_cycle` ENUM('monthly', 'yearly') NOT NULL DEFAULT 'monthly',
+  `max_shops` INT NOT NULL DEFAULT 1,
+  `max_sellers` INT NULL COMMENT 'NULL indicates unlimited sellers',
+  `is_active` BOOLEAN NOT NULL DEFAULT TRUE,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_plans_active` (`is_active`),
+  INDEX `idx_plans_code` (`plan_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -----------------------------------------------------------------------------
 -- 1. BUSINESSES TABLE (Platform Enterprise Tenants)
@@ -38,9 +57,21 @@ CREATE TABLE `businesses` (
   `currency_symbol` VARCHAR(10) NOT NULL DEFAULT 'TSh' COMMENT 'Currency display symbol (e.g. TSh, $, KSh)',
   `currency_name` VARCHAR(50) NOT NULL DEFAULT 'Tanzanian Shilling' COMMENT 'Full currency name',
   `status` ENUM('active', 'suspended') NOT NULL DEFAULT 'active',
+  `subscription_plan_id` INT NULL,
+  `subscription_status` ENUM('draft', 'payment_pending', 'payment_received', 'pending_review', 'trial', 'active', 'expired', 'cancelled', 'declined') NOT NULL DEFAULT 'active',
+  `subscription_start_date` DATETIME NULL,
+  `subscription_end_date` DATETIME NULL,
+  `owner_user_id` INT NULL,
+  `terms_accepted_version` VARCHAR(20) NULL,
+  `terms_accepted_at` DATETIME NULL,
+  `registration_notes` TEXT NULL,
+  `rejection_reason` TEXT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  INDEX `idx_businesses_status` (`status`)
+  CONSTRAINT `fk_businesses_plan` FOREIGN KEY (`subscription_plan_id`) REFERENCES `subscription_plans` (`id`) ON DELETE SET NULL,
+  INDEX `idx_businesses_status` (`status`),
+  INDEX `idx_businesses_sub_status` (`subscription_status`),
+  INDEX `idx_businesses_sub_end` (`subscription_end_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -----------------------------------------------------------------------------
@@ -279,4 +310,76 @@ CREATE TABLE `shop_requests` (
   CONSTRAINT `fk_shop_req_user` FOREIGN KEY (`requested_by_user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
   INDEX `idx_shop_req_status` (`status`),
   INDEX `idx_shop_req_business` (`business_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- -----------------------------------------------------------------------------
+-- 12. SUBSCRIPTION_PAYMENTS TABLE (Manual Cash/Bank/M-Pesa Payment Ledger)
+-- -----------------------------------------------------------------------------
+CREATE TABLE `subscription_payments` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `business_id` INT NOT NULL,
+  `plan_id` INT NOT NULL,
+  `amount` DECIMAL(12, 2) NOT NULL,
+  `payment_method` ENUM('CASH', 'BANK_TRANSFER', 'MOBILE_MONEY', 'OTHER') NOT NULL DEFAULT 'CASH',
+  `payment_reference` VARCHAR(100) NULL,
+  `period_start` DATETIME NOT NULL,
+  `period_end` DATETIME NOT NULL,
+  `recorded_by_user_id` INT NOT NULL,
+  `notes` TEXT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT `fk_sub_payments_business` FOREIGN KEY (`business_id`) REFERENCES `businesses` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_sub_payments_plan` FOREIGN KEY (`plan_id`) REFERENCES `subscription_plans` (`id`),
+  CONSTRAINT `fk_sub_payments_recorded_by` FOREIGN KEY (`recorded_by_user_id`) REFERENCES `users` (`id`),
+  INDEX `idx_sub_pay_business` (`business_id`),
+  INDEX `idx_sub_pay_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- -----------------------------------------------------------------------------
+-- 13. PLATFORM_SETTINGS TABLE (Database-Driven Platform & Contact Configuration)
+-- -----------------------------------------------------------------------------
+CREATE TABLE `platform_settings` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `platform_name` VARCHAR(150) NOT NULL DEFAULT 'JM Solution POS',
+  `support_name` VARCHAR(150) NOT NULL DEFAULT 'JM Solution Technical Team',
+  `support_phone` VARCHAR(50) NOT NULL DEFAULT '+255 754 000 000',
+  `support_whatsapp` VARCHAR(50) NOT NULL DEFAULT '+255 754 000 000',
+  `support_email` VARCHAR(100) NOT NULL DEFAULT 'support@jmsolutions.co.tz',
+  `support_address` VARCHAR(255) NOT NULL DEFAULT 'Dar es Salaam, Tanzania',
+  `terms_version` VARCHAR(20) NOT NULL DEFAULT 'v1.0',
+  `terms_content` TEXT NOT NULL,
+  `privacy_policy_version` VARCHAR(20) NOT NULL DEFAULT 'v1.0',
+  `privacy_policy_content` TEXT NULL,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `updated_by` INT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- -----------------------------------------------------------------------------
+-- 14. PAYMENT_METHODS TABLE (Configurable Manual Payment Instructions)
+-- -----------------------------------------------------------------------------
+CREATE TABLE `payment_methods` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `name` VARCHAR(100) NOT NULL,
+  `type` ENUM('MOBILE_MONEY', 'BANK_TRANSFER', 'CASH', 'OTHER') NOT NULL,
+  `account_name` VARCHAR(150) NOT NULL,
+  `account_number` VARCHAR(100) NOT NULL,
+  `instructions` TEXT NOT NULL,
+  `is_active` BOOLEAN NOT NULL DEFAULT TRUE,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_paymethods_active` (`is_active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- -----------------------------------------------------------------------------
+-- 15. BUSINESS_TERMS_ACCEPTANCE TABLE (Legal Auditing of Accepted Terms)
+-- -----------------------------------------------------------------------------
+CREATE TABLE `business_terms_acceptance` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `business_id` INT NOT NULL,
+  `user_id` INT NOT NULL,
+  `terms_version` VARCHAR(20) NOT NULL,
+  `accepted_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT `fk_terms_business` FOREIGN KEY (`business_id`) REFERENCES `businesses` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_terms_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  INDEX `idx_terms_business` (`business_id`),
+  INDEX `idx_terms_user` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -341,6 +341,18 @@ export async function listUsers(req, res, next) {
   }
 }
 
+/**
+ * Self-service Business & Owner Registration
+ */
+export async function registerBusiness(req, res, next) {
+  try {
+    const result = await authService.registerBusinessAndOwner(req.body);
+    res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 export default {
   login,
   refresh,
@@ -352,6 +364,7 @@ export default {
   updateProfile,
   setPin,
   registerUser,
+  registerBusiness,
   updateUser,
   setUserStatus,
   listUsers

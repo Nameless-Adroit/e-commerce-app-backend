@@ -10,7 +10,9 @@
     "db:init": "node src/scripts/init-db.js",
     "db:seed": "node src/scripts/seed-data.js",
     "db:migrate": "node src/scripts/migrate-auth.js",
+    "db:migrate:platform": "node src/scripts/migration-subscription-platform.js",
     "test:auth": "node src/scripts/test-auth-security.js",
+    "test:platform": "node src/scripts/test-subscription-platform.js",
     "test:id": "node -e \"import('./src/utils/id-generator.util.js').then(({ generateProductId, generateTransactionId }) => { console.log('Sample Product ID:', generateProductId('SHP01')); console.log('Sample TXN ID:', generateTransactionId('SHP01')); });\""
   },
   "keywords": [

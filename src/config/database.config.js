@@ -180,6 +180,10 @@ export async function testConnection() {
         console.log('✅ Backfill complete: shops and users migrated into Business hierarchy.');
       }
 
+      // Execute platform & subscription auto-migrations
+      const { runSubscriptionPlatformMigration } = await import('../scripts/migration-subscription-platform.js');
+      await runSubscriptionPlatformMigration();
+
     } catch (migrationErr) {
       console.warn('Schema migration notice:', migrationErr.message);
     }

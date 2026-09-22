@@ -19,26 +19,45 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // 1. Allow mobile apps, curl, Postman (which do not send an Origin header)
-    if (!origin) return callback(null, true);
+    // 1. Allow mobile apps, curl, Postman, sandboxed web views (which do not send an Origin header or send "null")
+    if (!origin || origin === 'null') return callback(null, true);
 
-    // 2. Allow localhost, 127.0.0.1, and private LAN IP ranges on any development port
+    // 2. Allow localhost, 127.0.0.1, and private LAN IP ranges on any development port (e.g. Vite 5173, 3000, 8081)
     const isLocalOrLan = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$/.test(origin);
 
-    if (isLocalOrLan || allowedOrigins.includes(origin)) {
+    // 3. Allow all jmsolutions.co.tz subdomains in production
+    const isJmSolutions = /^https?:\/\/([a-zA-Z0-9-]+\.)*jmsolutions\.co\.tz(:[0-9]+)?$/.test(origin);
+
+    if (isLocalOrLan || isJmSolutions || allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
 
-    return callback(new Error(`CORS blocked for origin: ${origin}`), false);
+    // Return clean refusal rather than unhandled Express error exception
+    return callback(null, false);
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Shop-Id', 'x-shop-id', 'Accept', 'Origin', 'X-Requested-With'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Shop-Id',
+    'x-shop-id',
+    'Accept',
+    'Origin',
+    'X-Requested-With',
+    'Access-Control-Allow-Origin',
+    'Access-Control-Allow-Credentials'
+  ],
+  exposedHeaders: ['Set-Cookie'],
   optionsSuccessStatus: 200
 };
 
-app.use(helmet({ crossOriginResourcePolicy: false }));
+app.use(helmet({ 
+  crossOriginResourcePolicy: false,
+  crossOriginOpenerPolicy: false 
+}));
 app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(cookieParserMiddleware);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

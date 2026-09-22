@@ -14,8 +14,11 @@ const router = express.Router();
 // -----------------------------------------------------------------------------
 // Public Authentication & Token Rotation Endpoints
 // -----------------------------------------------------------------------------
-// Unified Login: Phone + PIN (Staff) or Username + Password (Super Admin)
+// Unified Login: Phone + PIN
 router.post('/login', authRateLimiter, validateLoginPayload, authController.login);
+
+// New Business & Business Owner Onboarding Registration
+router.post('/register-business', authRateLimiter, authController.registerBusiness);
 
 // Refresh Access Token: Rotates 7-day Refresh Token and issues 15-minute Access Token
 router.post('/refresh', authRateLimiter, authController.refresh);

@@ -42,12 +42,13 @@ export async function authenticateToken(req, res, next) {
       }
     }
 
-    // Fetch latest user status and business info from DB
+    // Fetch latest user status, business info, and subscription state from DB
     const users = await query(
       `SELECT u.id, u.username, u.email, u.phone_number, u.profile_image, u.role, 
               u.business_id, u.shop_id, u.full_name, u.is_active, u.temporary_pin,
               b.name as business_name, b.currency_code as business_currency, b.currency_symbol as business_currency_symbol, 
-              b.currency_name as business_currency_name, b.status as business_status
+              b.currency_name as business_currency_name, b.status as business_status,
+              b.subscription_status, b.subscription_end_date
        FROM users u 
        LEFT JOIN businesses b ON u.business_id = b.id
        WHERE u.id = ? LIMIT 1`,
@@ -64,13 +65,60 @@ export async function authenticateToken(req, res, next) {
 
     const user = users[0];
 
-    // If business is suspended, block access unless Super Admin
-    if (user.role !== ROLES.SUPER_ADMIN && user.business_status === BUSINESS_STATUS.SUSPENDED) {
-      return res.status(403).json({
-        success: false,
-        code: 'BUSINESS_SUSPENDED',
-        message: 'Your business account has been suspended. Please contact platform support.'
-      });
+    // Lazy subscription expiration enforcement without cron
+    if (user.role !== ROLES.SUPER_ADMIN && user.business_id) {
+      const isPending = ['payment_pending', 'payment_received', 'pending_review', 'draft'].includes(user.subscription_status);
+      if (isPending) {
+        return res.status(403).json({
+          success: false,
+          code: 'REGISTRATION_PENDING_APPROVAL',
+          message: 'Your business registration is pending review or manual payment confirmation. Please contact the Technical Team.'
+        });
+      }
+
+      if (user.subscription_status === 'declined') {
+        return res.status(403).json({
+          success: false,
+          code: 'REGISTRATION_DECLINED',
+          message: 'Your business registration was declined. Please contact the Technical Team.'
+        });
+      }
+
+      const now = new Date();
+      const isExpired = user.subscription_status === 'expired' || 
+                        (user.subscription_end_date && new Date(user.subscription_end_date).getTime() < now.getTime());
+
+      if (isExpired) {
+        // Automatically persist expired state in DB on lazy evaluation
+        if (user.subscription_status !== 'expired' || user.business_status !== BUSINESS_STATUS.SUSPENDED) {
+          await query(
+            "UPDATE businesses SET subscription_status = 'expired', status = 'suspended' WHERE id = ?",
+            [user.business_id]
+          );
+        }
+
+        // Allow reading own subscription info, profile, or logging out when expired
+        const isAllowedWhenExpired = 
+          req.originalUrl?.includes('/subscriptions/my') || 
+          req.originalUrl?.includes('/auth/logout') ||
+          req.originalUrl?.includes('/auth/profile');
+
+        if (!isAllowedWhenExpired) {
+          return res.status(403).json({
+            success: false,
+            code: 'SUBSCRIPTION_EXPIRED',
+            message: 'Your business subscription has expired. Please contact the Technical Team to renew your service.'
+          });
+        }
+      }
+
+      if (user.business_status === BUSINESS_STATUS.SUSPENDED || user.subscription_status === 'cancelled') {
+        return res.status(403).json({
+          success: false,
+          code: 'BUSINESS_SUSPENDED',
+          message: 'Your business account has been suspended or cancelled. Please contact platform support.'
+        });
+      }
     }
 
     user.session_id = decoded.session_id || null;
@@ -84,6 +132,41 @@ export async function authenticateToken(req, res, next) {
       message: isExpired ? 'Access token expired.' : 'Invalid authentication token.'
     });
   }
+}
+
+/**
+ * Middleware: Strict Platform Owner (Super Admin) Access Guard
+ */
+export function requirePlatformOwner(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: 'Authentication required.' });
+  }
+  if (req.user.role !== ROLES.SUPER_ADMIN) {
+    return res.status(403).json({
+      success: false,
+      code: 'PLATFORM_OWNER_REQUIRED',
+      message: 'Forbidden: This resource is restricted to the Platform Owner / Technical Team.'
+    });
+  }
+  next();
+}
+
+/**
+ * Middleware: Mobile User Guard (Business Owners & Sellers only)
+ * Explicitly prevents Super Admin token misuse on mobile client endpoints
+ */
+export function requireMobileUser(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: 'Authentication required.' });
+  }
+  if (req.user.role === ROLES.SUPER_ADMIN) {
+    return res.status(403).json({
+      success: false,
+      code: 'PLATFORM_OWNER_WEB_ONLY',
+      message: 'Platform Owner administration is available exclusively via the Web Gateway.'
+    });
+  }
+  next();
 }
 
 /**
@@ -219,6 +302,8 @@ export async function enforceShopScope(req, res, next) {
 export default {
   authenticateToken,
   authorize,
+  requirePlatformOwner,
+  requireMobileUser,
   enforceBusinessScope,
   enforceShopScope
 };

@@ -76,7 +76,7 @@ export async function authenticateUser({
     `SELECT u.*, 
             b.name as business_name, b.business_code, b.currency_code as business_currency, 
             b.currency_symbol as business_currency_symbol, b.currency_name as business_currency_name,
-            b.status as business_status,
+            b.status as business_status, b.subscription_status, b.subscription_end_date,
             s.name as shop_name, s.shop_code, s.currency_code as shop_currency, 
             s.currency_symbol as shop_currency_symbol, s.currency_name as shop_currency_name
      FROM users u 
@@ -113,14 +113,36 @@ export async function authenticateUser({
   }
 
   // 3. Status checks
-  if (!user.is_active) {
-    const err = new Error('This user account has been deactivated. Please contact your manager.');
-    err.statusCode = 403;
-    throw err;
+  if (user.role !== ROLES.SUPER_ADMIN && user.business_id) {
+    if (['payment_pending', 'payment_received', 'pending_review', 'draft'].includes(user.subscription_status)) {
+      const err = new Error('Your business registration is pending review or manual payment confirmation. Please contact the Technical Team.');
+      err.statusCode = 403;
+      err.code = 'REGISTRATION_PENDING_APPROVAL';
+      throw err;
+    }
+    if (user.subscription_status === 'declined') {
+      const err = new Error('Your business registration was declined. Please contact the Technical Team for assistance.');
+      err.statusCode = 403;
+      err.code = 'REGISTRATION_DECLINED';
+      throw err;
+    }
+    const isPastEnd = user.subscription_end_date && new Date(user.subscription_end_date).getTime() < Date.now();
+    if (user.subscription_status === 'expired' || isPastEnd) {
+      const err = new Error('Your business subscription has expired. Please contact the Technical Team to renew your service.');
+      err.statusCode = 403;
+      err.code = 'SUBSCRIPTION_EXPIRED';
+      throw err;
+    }
+    if (user.business_status === BUSINESS_STATUS.SUSPENDED) {
+      const err = new Error('Your business account has been suspended. Please contact platform support.');
+      err.statusCode = 403;
+      err.code = 'BUSINESS_SUSPENDED';
+      throw err;
+    }
   }
 
-  if (user.role !== ROLES.SUPER_ADMIN && user.business_status === BUSINESS_STATUS.SUSPENDED) {
-    const err = new Error('Your business account has been suspended. Please contact platform support.');
+  if (!user.is_active) {
+    const err = new Error('This user account has been deactivated. Please contact your administrator.');
     err.statusCode = 403;
     throw err;
   }
@@ -258,15 +280,19 @@ export async function registerUser({ currentUser, userData }) {
   // Role hierarchy permission checks
   if (currentUser.role === ROLES.ADMIN) {
     if (role !== ROLES.SELLER) {
-      const err = new Error('Admins are only permitted to register Sellers for their business.');
+      const err = new Error('Forbidden: Store Admins can only register Sellers.');
       err.statusCode = 403;
       throw err;
     }
 
     assignedBusinessId = currentUser.business_id;
 
+    // Enforce subscription plan seller limit
+    const { enforceSellerLimit } = await import('./subscription.service.js');
+    await enforceSellerLimit(assignedBusinessId);
+
     if (!shop_id) {
-      const err = new Error('A shop_id is required when registering a Seller.');
+      const err = new Error('A valid shop_id within your business must be specified.');
       err.statusCode = 400;
       throw err;
     }
@@ -383,11 +409,168 @@ export async function registerUser({ currentUser, userData }) {
   };
 }
 
+/**
+ * Registers a new Business and Business Owner (Self-Service Onboarding)
+ * Sets business status to 'payment_pending' awaiting manual payment confirmation by Platform Owner.
+ */
+export async function registerBusinessAndOwner({
+  ownerName,
+  ownerPhone,
+  ownerEmail,
+  ownerPin,
+  businessName,
+  currencyCode = 'TZS',
+  planId,
+  termsVersion = 'v1.0',
+  registrationNotes = ''
+}) {
+  if (!ownerName || !ownerPhone || !ownerPin || !businessName || !planId) {
+    const err = new Error('Owner name, phone number, 6-digit PIN, business name, and selected plan are required.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const normalizedPhone = normalizePhoneNumber(ownerPhone);
+  if (!normalizedPhone || !isValidPhoneNumber(normalizedPhone)) {
+    const err = new Error('Invalid phone number format (e.g. 0712 100 001 or +255712100001).');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const cleanPin = String(ownerPin).trim();
+  if (!isValidPin(cleanPin)) {
+    const err = new Error('PIN must be exactly 6 numeric digits.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Verify unique collision
+  const existingUser = await query(
+    'SELECT id FROM users WHERE phone_number = ? OR (email IS NOT NULL AND email = ?) LIMIT 1',
+    [normalizedPhone, (ownerEmail || '').trim()]
+  );
+  if (existingUser.length > 0) {
+    const err = new Error('A user account with this phone number or email already exists.');
+    err.statusCode = 409;
+    throw err;
+  }
+
+  // Verify plan exists & is active
+  const { getPlanById } = await import('./subscription.service.js');
+  const plan = await getPlanById(planId);
+  if (!plan.is_active) {
+    const err = new Error('The selected subscription plan is retired. Please choose an active plan.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Generate clean unique business code (e.g. BIZ03)
+  const [countRows] = await query('SELECT COUNT(*) as count FROM businesses');
+  const nextNum = (countRows[0].count || 0) + 1;
+  const businessCode = `BIZ${String(nextNum).padStart(2, '0')}`;
+
+  const pinHash = await hashPin(cleanPin);
+  const emailVal = ownerEmail && ownerEmail.trim() ? ownerEmail.trim() : `${normalizedPhone.replace('+', '')}@jmsolutions.local`;
+  const usernameVal = normalizedPhone;
+
+  let newBusinessId = null;
+  let newUserId = null;
+
+  const { executeTransaction } = await import('../config/database.config.js');
+
+  await executeTransaction(async (conn) => {
+    // 1. Insert business in 'payment_pending' / 'suspended' status
+    const [bizResult] = await conn.query(`
+      INSERT INTO businesses 
+        (business_code, name, currency_code, currency_symbol, currency_name, status, subscription_plan_id, subscription_status, terms_accepted_version, terms_accepted_at, registration_notes)
+      VALUES (?, ?, ?, 'TSh', 'Tanzanian Shilling', 'suspended', ?, 'payment_pending', ?, NOW(), ?)
+    `, [
+      businessCode,
+      businessName.trim(),
+      currencyCode.trim().toUpperCase(),
+      plan.id,
+      termsVersion.trim(),
+      registrationNotes ? registrationNotes.trim() : null
+    ]);
+    newBusinessId = bizResult.insertId;
+
+    // 2. Insert owner user account (initially inactive until platform approval)
+    const [userResult] = await conn.query(`
+      INSERT INTO users 
+        (username, email, phone_number, pin_hash, full_name, role, business_id, is_active, temporary_pin)
+      VALUES (?, ?, ?, ?, ?, 'admin', ?, FALSE, FALSE)
+    `, [
+      usernameVal,
+      emailVal,
+      normalizedPhone,
+      pinHash,
+      ownerName.trim(),
+      newBusinessId
+    ]);
+    newUserId = userResult.insertId;
+
+    // 3. Link owner_user_id back to business
+    await conn.query('UPDATE businesses SET owner_user_id = ? WHERE id = ?', [newUserId, newBusinessId]);
+
+    // 4. Record terms acceptance
+    await conn.query(`
+      INSERT INTO business_terms_acceptance (business_id, user_id, terms_version)
+      VALUES (?, ?, ?)
+    `, [newBusinessId, newUserId, termsVersion.trim()]);
+  });
+
+  // Record audit log
+  await recordAuditEvent({
+    userId: newUserId,
+    action: 'BUSINESS_REGISTERED',
+    targetResource: 'businesses',
+    targetId: newBusinessId,
+    businessId: newBusinessId,
+    changes: {
+      business_name: businessName.trim(),
+      business_code: businessCode,
+      owner_name: ownerName.trim(),
+      owner_phone: normalizedPhone,
+      plan_code: plan.plan_code
+    }
+  });
+
+  // Fetch dynamic payment instructions & technical support contacts
+  const { getPublicPlatformConfig } = await import('./platform.service.js');
+  const platformConfig = await getPublicPlatformConfig();
+
+  return {
+    success: true,
+    message: 'Your business registration request has been submitted successfully.',
+    data: {
+      businessId: newBusinessId,
+      businessCode,
+      businessName: businessName.trim(),
+      status: 'payment_pending',
+      plan: {
+        id: plan.id,
+        name: plan.name,
+        price: plan.price,
+        billing_cycle: plan.billing_cycle
+      },
+      owner: {
+        id: newUserId,
+        name: ownerName.trim(),
+        phone: normalizedPhone
+      },
+      support: platformConfig.support,
+      paymentMethods: platformConfig.paymentMethods
+    }
+  };
+}
+
 export default {
   getRoleDashboardRedirect,
   authenticateUser,
   refreshAccessToken,
   logoutUser,
   logoutAllSessions,
-  registerUser
+  registerUser,
+  registerBusinessAndOwner
 };
+

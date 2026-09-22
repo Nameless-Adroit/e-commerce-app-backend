@@ -79,6 +79,10 @@ export async function createShop({ currentUser, shopData }) {
     throw err;
   }
 
+  // Enforce subscription plan max_shops limit
+  const { enforceShopLimit } = await import('./subscription.service.js');
+  await enforceShopLimit(targetBusinessId);
+
   // Fetch business to verify existence and inherit currency settings
   const businesses = await query('SELECT * FROM businesses WHERE id = ? LIMIT 1', [targetBusinessId]);
   if (!businesses || businesses.length === 0) {
@@ -257,6 +261,10 @@ export async function approveShopRequest({ currentUser, requestId, superAdminNot
     throw err;
   }
   const business = businesses[0];
+
+  // Enforce subscription plan max_shops limit
+  const { enforceShopLimit } = await import('./subscription.service.js');
+  await enforceShopLimit(reqRow.business_id);
 
   // Verify shop_code uniqueness in shops table
   const existingShop = await query('SELECT id FROM shops WHERE shop_code = ? LIMIT 1', [reqRow.shop_code]);
