@@ -371,7 +371,8 @@ export async function getSubscriptionHistory(businessId) {
   const payments = await query(sql, [businessId]);
   return payments.map(p => ({
     ...p,
-    amount: parseFloat(p.amount)
+    amount: parseFloat(p.amount),
+    status: p.status || 'verified'
   }));
 }
 

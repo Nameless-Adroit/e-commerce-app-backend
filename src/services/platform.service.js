@@ -552,7 +552,7 @@ export async function getPlatformDashboardMetrics() {
 
   // Recent payments
   const recentPayments = await query(`
-    SELECT sp.*, b.name as business_name, p.name as plan_name, u.full_name as recorded_by_name
+    SELECT sp.*, b.name as business_name, b.business_code, p.name as plan_name, p.billing_cycle, u.full_name as recorded_by_name
     FROM subscription_payments sp
     JOIN businesses b ON sp.business_id = b.id
     JOIN subscription_plans p ON sp.plan_id = p.id
@@ -580,6 +580,21 @@ export async function getPlatformDashboardMetrics() {
   const totalActiveShops = parseInt(activeShops?.count || 0, 10);
   const totalActiveSellers = parseInt(activeSellers?.count || 0, 10);
 
+  const formattedRecentPayments = recentPayments.map(p => {
+    const startMs = new Date(p.period_start).getTime();
+    const endMs = new Date(p.period_end).getTime();
+    const durationDays = !isNaN(startMs) && !isNaN(endMs)
+      ? Math.max(1, Math.round((endMs - startMs) / (1000 * 60 * 60 * 24)))
+      : (p.billing_cycle === 'daily' ? 1 : p.billing_cycle === 'weekly' ? 7 : p.billing_cycle === 'yearly' ? 365 : 30);
+
+    return {
+      ...p,
+      amount: parseFloat(p.amount),
+      duration_days: durationDays,
+      status: p.status || 'verified'
+    };
+  });
+
   return {
     total_businesses: totalBusinesses,
     totalBusinesses,
@@ -599,8 +614,8 @@ export async function getPlatformDashboardMetrics() {
     totalActiveSellers,
     expiring_businesses,
     expiringBusinesses: expiring_businesses,
-    recent_payments: recentPayments.map(p => ({ ...p, amount: parseFloat(p.amount) })),
-    recentPayments: recentPayments.map(p => ({ ...p, amount: parseFloat(p.amount) })),
+    recent_payments: formattedRecentPayments,
+    recentPayments: formattedRecentPayments,
     recent_registrations: recentRegistrations,
     recentRegistrations
   };
