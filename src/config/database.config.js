@@ -74,6 +74,16 @@ export async function testConnection() {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
       `);
 
+      // Helper to check table existence
+      const checkTableExists = async (tableName) => {
+        const [rows] = await connection.query(`
+          SELECT TABLE_NAME 
+          FROM INFORMATION_SCHEMA.TABLES 
+          WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+        `, [dbName, tableName]);
+        return rows.length > 0;
+      };
+
       // Helper to check column existence
       const checkColumn = async (tableName, colName) => {
         const [rows] = await connection.query(`
@@ -85,50 +95,56 @@ export async function testConnection() {
       };
 
       // 2. Ensure business_id exists on shops
-      if (!(await checkColumn('shops', 'business_id'))) {
-        await connection.query('ALTER TABLE shops ADD COLUMN business_id INT NULL AFTER id');
-        await connection.query('ALTER TABLE shops ADD INDEX idx_shops_business (business_id)');
-        console.log('✅ Added business_id column to shops table');
-      }
+      if (await checkTableExists('shops')) {
+        if (!(await checkColumn('shops', 'business_id'))) {
+          await connection.query('ALTER TABLE shops ADD COLUMN business_id INT NULL AFTER id');
+          await connection.query('ALTER TABLE shops ADD INDEX idx_shops_business (business_id)');
+          console.log('✅ Added business_id column to shops table');
+        }
 
-      // Ensure currency columns exist on shops table
-      if (!(await checkColumn('shops', 'currency_code'))) {
-        await connection.query("ALTER TABLE shops ADD COLUMN currency_code VARCHAR(10) NOT NULL DEFAULT 'TZS' AFTER phone");
-        console.log('✅ Added currency_code column to shops table');
-      }
-      if (!(await checkColumn('shops', 'currency_symbol'))) {
-        await connection.query("ALTER TABLE shops ADD COLUMN currency_symbol VARCHAR(10) NOT NULL DEFAULT 'TSh' AFTER currency_code");
-        console.log('✅ Added currency_symbol column to shops table');
-      }
-      if (!(await checkColumn('shops', 'currency_name'))) {
-        await connection.query("ALTER TABLE shops ADD COLUMN currency_name VARCHAR(50) NOT NULL DEFAULT 'Tanzanian Shilling' AFTER currency_symbol");
-        console.log('✅ Added currency_name column to shops table');
+        // Ensure currency columns exist on shops table
+        if (!(await checkColumn('shops', 'currency_code'))) {
+          await connection.query("ALTER TABLE shops ADD COLUMN currency_code VARCHAR(10) NOT NULL DEFAULT 'TZS' AFTER phone");
+          console.log('✅ Added currency_code column to shops table');
+        }
+        if (!(await checkColumn('shops', 'currency_symbol'))) {
+          await connection.query("ALTER TABLE shops ADD COLUMN currency_symbol VARCHAR(10) NOT NULL DEFAULT 'TSh' AFTER currency_code");
+          console.log('✅ Added currency_symbol column to shops table');
+        }
+        if (!(await checkColumn('shops', 'currency_name'))) {
+          await connection.query("ALTER TABLE shops ADD COLUMN currency_name VARCHAR(50) NOT NULL DEFAULT 'Tanzanian Shilling' AFTER currency_symbol");
+          console.log('✅ Added currency_name column to shops table');
+        }
       }
 
       // 3. Ensure business_id and temporary_pin exist on users
-      if (!(await checkColumn('users', 'business_id'))) {
-        await connection.query('ALTER TABLE users ADD COLUMN business_id INT NULL AFTER role');
-        await connection.query('ALTER TABLE users ADD INDEX idx_users_business (business_id)');
-        console.log('✅ Added business_id column to users table');
-      }
-      if (!(await checkColumn('users', 'temporary_pin'))) {
-        await connection.query('ALTER TABLE users ADD COLUMN temporary_pin BOOLEAN NOT NULL DEFAULT FALSE');
-        console.log('✅ Added temporary_pin column to users table');
+      if (await checkTableExists('users')) {
+        if (!(await checkColumn('users', 'business_id'))) {
+          await connection.query('ALTER TABLE users ADD COLUMN business_id INT NULL AFTER role');
+          await connection.query('ALTER TABLE users ADD INDEX idx_users_business (business_id)');
+          console.log('✅ Added business_id column to users table');
+        }
+        if (!(await checkColumn('users', 'temporary_pin'))) {
+          await connection.query('ALTER TABLE users ADD COLUMN temporary_pin BOOLEAN NOT NULL DEFAULT FALSE');
+          console.log('✅ Added temporary_pin column to users table');
+        }
       }
 
       // 4. Ensure discount and original_transaction_id columns exist on transactions table
-      if (!(await checkColumn('transactions', 'subtotal_amount'))) {
-        await connection.query('ALTER TABLE transactions ADD COLUMN subtotal_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00 AFTER seller_id');
-        console.log('✅ Added subtotal_amount column to transactions table');
-      }
-      if (!(await checkColumn('transactions', 'discount_amount'))) {
-        await connection.query('ALTER TABLE transactions ADD COLUMN discount_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00 AFTER subtotal_amount');
-        console.log('✅ Added discount_amount column to transactions table');
-      }
-      if (!(await checkColumn('transactions', 'original_transaction_id'))) {
-        await connection.query('ALTER TABLE transactions ADD COLUMN original_transaction_id VARCHAR(50) NULL AFTER status');
-        await connection.query('ALTER TABLE transactions ADD INDEX idx_transactions_original (original_transaction_id)');
-        console.log('✅ Added original_transaction_id column to transactions table');
+      if (await checkTableExists('transactions')) {
+        if (!(await checkColumn('transactions', 'subtotal_amount'))) {
+          await connection.query('ALTER TABLE transactions ADD COLUMN subtotal_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00 AFTER seller_id');
+          console.log('✅ Added subtotal_amount column to transactions table');
+        }
+        if (!(await checkColumn('transactions', 'discount_amount'))) {
+          await connection.query('ALTER TABLE transactions ADD COLUMN discount_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00 AFTER subtotal_amount');
+          console.log('✅ Added discount_amount column to transactions table');
+        }
+        if (!(await checkColumn('transactions', 'original_transaction_id'))) {
+          await connection.query('ALTER TABLE transactions ADD COLUMN original_transaction_id VARCHAR(50) NULL AFTER status');
+          await connection.query('ALTER TABLE transactions ADD INDEX idx_transactions_original (original_transaction_id)');
+          console.log('✅ Added original_transaction_id column to transactions table');
+        }
       }
 
       // 5. Backfill/Migrate existing records into Business hierarchy if businesses is empty
@@ -183,6 +199,10 @@ export async function testConnection() {
       // Execute platform & subscription auto-migrations
       const { runSubscriptionPlatformMigration } = await import('../scripts/migration-subscription-platform.js');
       await runSubscriptionPlatformMigration();
+
+      // Ensure core operational tables exist (products, transactions, items, logs)
+      const { ensureAllTablesExist } = await import('../scripts/ensure-tables.js');
+      await ensureAllTablesExist();
 
     } catch (migrationErr) {
       console.warn('Schema migration notice:', migrationErr.message);

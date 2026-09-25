@@ -1,5 +1,6 @@
 import { query } from '../config/database.config.js';
 import { BUSINESS_STATUS, ROLES } from '../config/constants.js';
+import { recordAuditEvent } from './audit.service.js';
 
 /**
  * List all businesses with aggregated counts and metrics (Super Admin)
@@ -8,11 +9,16 @@ export async function getAllBusinesses() {
   const sql = `
     SELECT 
       b.*,
+      p.name as subscription_plan_name,
+      p.billing_cycle as plan_billing_cycle,
+      p.max_shops as plan_max_shops,
+      p.max_sellers as plan_max_sellers,
       COUNT(DISTINCT s.id) as shops_count,
       COUNT(DISTINCT CASE WHEN u.role = 'admin' AND u.is_active = TRUE THEN u.id END) as admins_count,
       COUNT(DISTINCT CASE WHEN u.role = 'seller' AND u.is_active = TRUE THEN u.id END) as sellers_count,
       COALESCE(SUM(t.total_amount), 0) as total_revenue
     FROM businesses b
+    LEFT JOIN subscription_plans p ON b.subscription_plan_id = p.id
     LEFT JOIN shops s ON b.id = s.business_id
     LEFT JOIN users u ON b.id = u.business_id
     LEFT JOIN transactions t ON s.id = t.shop_id AND t.status = 'completed'
@@ -21,13 +27,26 @@ export async function getAllBusinesses() {
   `;
 
   const businesses = await query(sql);
-  return businesses.map(b => ({
-    ...b,
-    shops_count: parseInt(b.shops_count, 10) || 0,
-    admins_count: parseInt(b.admins_count, 10) || 0,
-    sellers_count: parseInt(b.sellers_count, 10) || 0,
-    total_revenue: parseFloat(b.total_revenue) || 0
-  }));
+  const now = new Date();
+
+  return businesses.map(b => {
+    let daysRemaining = null;
+    if (b.subscription_end_date) {
+      const end = new Date(b.subscription_end_date);
+      daysRemaining = Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    }
+
+    return {
+      ...b,
+      days_remaining: daysRemaining,
+      max_shops: b.plan_max_shops || b.max_shops || 1,
+      max_sellers: b.plan_max_sellers || b.max_sellers || 1,
+      shops_count: parseInt(b.shops_count, 10) || 0,
+      admins_count: parseInt(b.admins_count, 10) || 0,
+      sellers_count: parseInt(b.sellers_count, 10) || 0,
+      total_revenue: parseFloat(b.total_revenue) || 0
+    };
+  });
 }
 
 /**
@@ -81,7 +100,7 @@ export async function getBusinessById(businessId) {
 /**
  * Create a new Business (Super Admin)
  */
-export async function createBusiness({ name, business_code, currency_code = 'TZS', currency_symbol = 'TSh', currency_name = 'Tanzanian Shilling' }) {
+export async function createBusiness({ name, business_code, currency_code = 'TZS', currency_symbol = 'TSh', currency_name = 'Tanzanian Shilling', shop_name }) {
   if (!name) {
     const err = new Error('Business name is required.');
     err.statusCode = 400;
@@ -108,13 +127,26 @@ export async function createBusiness({ name, business_code, currency_code = 'TZS
   const cleanCurrencyName = (currency_name || 'Tanzanian Shilling').trim();
 
   const result = await query(
-    `INSERT INTO businesses (business_code, name, currency_code, currency_symbol, currency_name, status)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO businesses (
+       business_code, name, currency_code, currency_symbol, currency_name, status,
+       subscription_plan_id, subscription_status, subscription_start_date, subscription_end_date
+     ) VALUES (?, ?, ?, ?, ?, ?, 1, 'trial', NOW(), DATE_ADD(NOW(), INTERVAL 90 DAY))`,
     [cleanCode, name.trim(), cleanCurrencyCode, cleanCurrencySymbol, cleanCurrencyName, BUSINESS_STATUS.ACTIVE]
   );
 
+  const newBizId = result.insertId;
+
+  // Provision primary shop automatically if shop name is provided or default to 'Main Branch'
+  const primaryShopCode = `${cleanCode}-S01`;
+  const primaryShopName = (shop_name || 'Main Branch').trim();
+  await query(
+    `INSERT INTO shops (business_id, shop_code, name, currency_code, currency_symbol, currency_name)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [newBizId, primaryShopCode, primaryShopName, cleanCurrencyCode, cleanCurrencySymbol, cleanCurrencyName]
+  );
+
   return {
-    id: result.insertId,
+    id: newBizId,
     business_code: cleanCode,
     name: name.trim(),
     currency_code: cleanCurrencyCode,
@@ -159,12 +191,61 @@ export async function updateBusiness(businessId, updateData) {
   if (status !== undefined) {
     fields.push('status = ?');
     params.push(status);
+
+    if (status === BUSINESS_STATUS.SUSPENDED) {
+      await query(`
+        UPDATE sessions 
+        SET is_revoked = TRUE, revoke_reason = "business_suspended" 
+        WHERE user_id IN (SELECT id FROM users WHERE business_id = ?)
+      `, [businessId]);
+    }
   }
 
   if (fields.length > 0) {
     params.push(businessId);
     await query(`UPDATE businesses SET ${fields.join(', ')} WHERE id = ?`, params);
   }
+
+  return await getBusinessById(businessId);
+}
+
+/**
+ * Super Admin toggles business status ('active' or 'suspended')
+ */
+export async function setBusinessStatus({ businessId, status, currentUser }) {
+  const cleanStatus = status?.trim()?.toLowerCase();
+  if (![BUSINESS_STATUS.ACTIVE, BUSINESS_STATUS.SUSPENDED].includes(cleanStatus)) {
+    const err = new Error("Invalid status. Allowed values are 'active' or 'suspended'.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const businesses = await query('SELECT * FROM businesses WHERE id = ? LIMIT 1', [businessId]);
+  if (!businesses || businesses.length === 0) {
+    const err = new Error('Business not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  await query('UPDATE businesses SET status = ? WHERE id = ?', [cleanStatus, businessId]);
+
+  // If business is suspended, immediately revoke all active sessions for all users of this business
+  if (cleanStatus === BUSINESS_STATUS.SUSPENDED) {
+    await query(`
+      UPDATE sessions 
+      SET is_revoked = TRUE, revoke_reason = "business_suspended" 
+      WHERE user_id IN (SELECT id FROM users WHERE business_id = ?)
+    `, [businessId]);
+  }
+
+  await recordAuditEvent({
+    userId: currentUser.id,
+    action: cleanStatus === BUSINESS_STATUS.SUSPENDED ? 'BUSINESS_SUSPENDED' : 'BUSINESS_ACTIVATED',
+    targetResource: 'businesses',
+    targetId: businessId,
+    businessId,
+    changes: { status: cleanStatus }
+  });
 
   return await getBusinessById(businessId);
 }
@@ -240,5 +321,6 @@ export default {
   getBusinessById,
   createBusiness,
   updateBusiness,
+  setBusinessStatus,
   getBusinessOverview
 };

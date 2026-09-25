@@ -23,7 +23,7 @@
     "rbac",
     "react-native"
   ],
-  "author": "",
+  "author": "Nameless-Adroit",
   "license": "ISC",
   "dependencies": {
     "bcryptjs": "^2.4.3",

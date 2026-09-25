@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 import apiRoutes from './routes/index.route.js';
 import errorHandler from './middleware/error.middleware.js';
 import cookieParserMiddleware from './middleware/cookie.middleware.js';
+import { morganFileStream } from './utils/logger.util.js';
 
 dotenv.config();
 
@@ -62,8 +63,10 @@ app.use(cookieParserMiddleware);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// HTTP Request logging (to console and persistent backend file)
 if (process.env.NODE_ENV !== 'test') {
   app.use(morgan('dev'));
+  app.use(morgan(':method :url :status :res[content-length] - :response-time ms - IP::remote-addr', { stream: morganFileStream }));
 }
 
 // Health check endpoint

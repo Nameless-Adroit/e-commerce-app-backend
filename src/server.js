@@ -1,3 +1,4 @@
+import './utils/logger.util.js';
 import app from './app.js';
 import { testConnection } from './config/database.config.js';
 

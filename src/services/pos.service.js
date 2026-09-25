@@ -360,8 +360,8 @@ export async function processReturn({ shopId, sellerId: directSellerId, currentU
 /**
  * Query transaction history with filter parameters and summary aggregation
  */
-export async function getTransactionHistory({ shopId, businessId, queryParams }) {
-  const { limit = 50, offset = 0, date, start_date, end_date, seller_id, status } = queryParams;
+export async function getTransactionHistory({ shopId, businessId, queryParams = {} } = {}) {
+  const { limit = 50, offset = 0, date, start_date, end_date, seller_id, status } = queryParams || {};
 
   let whereClauses = [];
   let params = [];

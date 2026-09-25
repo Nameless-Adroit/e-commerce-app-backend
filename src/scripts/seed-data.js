@@ -34,6 +34,28 @@ async function seedDatabase() {
       throw new Error(`seed.sql not found at ${seedPath}`);
     }
 
+    // 1. Discover existing tables in the database
+    const [tableRows] = await connection.query(`
+      SELECT TABLE_NAME 
+      FROM INFORMATION_SCHEMA.TABLES 
+      WHERE TABLE_SCHEMA = ?
+    `, [database]);
+    const existingTables = new Set(tableRows.map(r => r.TABLE_NAME));
+
+    // 2. Safely clear data from existing tables
+    const tablesToClean = [
+      'daily_reports', 'inventory_logs', 'transaction_items', 'transactions',
+      'products', 'sessions', 'security_logs', 'users', 'shops', 'businesses'
+    ];
+
+    await connection.query('SET FOREIGN_KEY_CHECKS = 0');
+    for (const tbl of tablesToClean) {
+      if (existingTables.has(tbl)) {
+        await connection.query(`TRUNCATE TABLE \`${tbl}\``);
+      }
+    }
+    await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+
     const seedSql = fs.readFileSync(seedPath, 'utf8');
     console.log('📦 Executing seed.sql statements...');
 

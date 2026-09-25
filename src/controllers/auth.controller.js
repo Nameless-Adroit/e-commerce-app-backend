@@ -334,9 +334,14 @@ export async function listUsers(req, res, next) {
     `;
 
     const users = await dbQuery(sql, params);
+    const formattedUsers = users.map(u => ({
+      ...u,
+      is_active: u.is_active === 1 || u.is_active === true || u.is_active === '1'
+    }));
+
     res.status(200).json({
       success: true,
-      data: { users }
+      data: { users: formattedUsers }
     });
   } catch (err) {
     next(err);

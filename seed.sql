@@ -14,18 +14,6 @@
 
 -- USE `pos_ecommerce_db`;
 
--- SET FOREIGN_KEY_CHECKS = 0;
-
--- -- Clean existing data before seeding fresh records
--- TRUNCATE TABLE `daily_reports`;
--- TRUNCATE TABLE `inventory_logs`;
--- TRUNCATE TABLE `transaction_items`;
--- TRUNCATE TABLE `transactions`;
--- TRUNCATE TABLE `products`;
--- TRUNCATE TABLE `users`;
--- TRUNCATE TABLE `shops`;
--- TRUNCATE TABLE `businesses`;
-
 -- -----------------------------------------------------------------------------
 -- 1. SEED BUSINESSES (Platform Enterprise Tenants)
 -- -----------------------------------------------------------------------------

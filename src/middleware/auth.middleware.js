@@ -241,12 +241,15 @@ export function enforceBusinessScope(req, res, next) {
   }
 
   // Cross-tenant protection: verify any requested businessId matches user's owned business
-  const requestedBusinessId = req.params.businessId || req.params.id || req.query.business_id || req.body.business_id;
-  if (requestedBusinessId && parseInt(requestedBusinessId, 10) !== parseInt(req.user.business_id, 10)) {
-    return res.status(403).json({
-      success: false,
-      message: 'Forbidden: Unauthorized attempt to access another business entity.'
-    });
+  const isBusinessParam = req.params.businessId || req.query.business_id || req.body.business_id || (req.baseUrl?.endsWith('/businesses') ? req.params.id : null);
+  if (isBusinessParam) {
+    const parsedId = parseInt(isBusinessParam, 10);
+    if (!isNaN(parsedId) && parsedId !== parseInt(req.user.business_id, 10)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden: Unauthorized attempt to access another business entity.'
+      });
+    }
   }
 
   req.targetBusinessId = req.user.business_id;

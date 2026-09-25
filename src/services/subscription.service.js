@@ -64,6 +64,10 @@ export function calculateRenewalDates({ currentEndDate, billingCycle = 'monthly'
 
   if (billingCycle === 'yearly') {
     periodEnd.setFullYear(periodEnd.getFullYear() + numCycles);
+  } else if (billingCycle === 'weekly') {
+    periodEnd.setDate(periodEnd.getDate() + (7 * numCycles));
+  } else if (billingCycle === 'daily') {
+    periodEnd.setDate(periodEnd.getDate() + numCycles);
   } else {
     // monthly: handle calendar month rollover accurately
     const targetMonth = periodEnd.getMonth() + numCycles;
@@ -93,6 +97,8 @@ export async function listPlans({ activeOnly = false } = {}) {
   return plans.map(p => ({
     ...p,
     price: parseFloat(p.price),
+    price_tzs: parseFloat(p.price),
+    duration_days: p.billing_cycle === 'daily' ? 1 : p.billing_cycle === 'weekly' ? 7 : p.billing_cycle === 'yearly' ? 365 : 30,
     max_shops: parseInt(p.max_shops, 10),
     max_sellers: p.max_sellers !== null ? parseInt(p.max_sellers, 10) : null,
     is_active: Boolean(p.is_active)
@@ -155,7 +161,7 @@ export async function createPlan({ plan_code, name, price, billing_cycle = 'mont
     cleanCode,
     name.trim(),
     cleanPrice,
-    billing_cycle === 'yearly' ? 'yearly' : 'monthly',
+    ['daily', 'weekly', 'monthly', 'yearly'].includes(billing_cycle) ? billing_cycle : 'monthly',
     parseInt(max_shops, 10) || 1,
     max_sellers !== null && max_sellers !== '' ? parseInt(max_sellers, 10) : null
   ]);
@@ -201,7 +207,7 @@ export async function updatePlan(planId, { name, price, billing_cycle, max_shops
   }
   if (billing_cycle !== undefined) {
     fields.push('billing_cycle = ?');
-    params.push(billing_cycle === 'yearly' ? 'yearly' : 'monthly');
+    params.push(['daily', 'weekly', 'monthly', 'yearly'].includes(billing_cycle) ? billing_cycle : 'monthly');
     changes.billing_cycle = billing_cycle;
   }
   if (max_shops !== undefined) {
@@ -331,6 +337,11 @@ export async function getBusinessSubscription(businessId) {
       max_shops: parseInt(b.max_shops, 10) || 1,
       max_sellers: b.max_sellers !== null ? parseInt(b.max_sellers, 10) : null
     } : null,
+    active_shops_count: parseInt(b.shops_count, 10) || 0,
+    max_shops: b.max_shops ? parseInt(b.max_shops, 10) : 1,
+    active_sellers_count: parseInt(b.sellers_count, 10) || 0,
+    max_sellers: b.max_sellers !== null ? parseInt(b.max_sellers, 10) : null,
+    is_expired: b.subscription_status === 'expired' || daysRemaining <= 0,
     usage: {
       current_shops: parseInt(b.shops_count, 10) || 0,
       max_shops: b.max_shops ? parseInt(b.max_shops, 10) : 1,
@@ -617,12 +628,13 @@ export async function enforceShopLimit(businessId) {
  */
 export async function enforceSellerLimit(businessId) {
   const sub = await getBusinessSubscription(businessId);
-  const maxSellers = sub.plan?.max_sellers; // null means unlimited
+  const maxSellers = sub.plan?.max_sellers ?? sub.max_sellers; // null means unlimited
 
   if (maxSellers !== null && maxSellers !== undefined) {
-    const currentSellers = sub.usage.current_sellers;
+    const currentSellers = sub.usage?.current_sellers ?? sub.active_sellers_count ?? 0;
     if (currentSellers >= maxSellers) {
-      const err = new Error(`Your current subscription allows up to ${maxSellers} seller(s). Please contact the Technical Team to upgrade your subscription to add more sellers.`);
+      const planName = sub.plan?.name || 'current';
+      const err = new Error(`Your ${planName} plan allows up to ${maxSellers} active cashier account(s) (${currentSellers} currently active). Please upgrade your subscription plan in Billing to add more cashiers.`);
       err.statusCode = 403;
       err.code = 'LIMIT_SELLERS_EXCEEDED';
       throw err;

@@ -1,3 +1,4 @@
+import '../utils/logger.util.js';
 import assert from 'assert';
 import { testConnection, query } from '../config/database.config.js';
 import * as phoneUtil from '../utils/phone.util.js';
@@ -159,11 +160,11 @@ async function runTestSuite() {
 
   const insertResult = await query(`
     INSERT INTO users (
-      username, email, phone_number, pin_hash, role, status
+      username, email, phone_number, pin_hash, role, full_name, is_active
     ) VALUES (
-      ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?
     )
-  `, ['test_security_user', 'sec@test.local', testPhone, testPinHash, 'seller', 'active']);
+  `, ['test_security_user', 'sec@test.local', testPhone, testPinHash, 'seller', 'Test Security User', true]);
   
   const testUserId = insertResult.insertId;
 
@@ -268,7 +269,11 @@ async function runTestSuite() {
       authError = err;
     }
     assert.ok(authError, 'Authentication must fail when account is locked');
-    assert.ok(authError.message.toLowerCase().includes('lock') || authError.statusCode === 423);
+    assert.ok(
+      authError.message.includes('CANNOT EXECUTE NOW TRY LATER') ||
+      authError.statusCode === 429 ||
+      authError.statusCode === 423
+    );
 
     // Reset lockout
     await securityService.resetFailedAttempts(testUserId);

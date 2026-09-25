@@ -52,6 +52,25 @@ export async function updateBusiness(req, res, next) {
   }
 }
 
+export async function setBusinessStatus(req, res, next) {
+  try {
+    const businessId = parseInt(req.params.id, 10);
+    const { status } = req.body;
+    const updated = await businessService.setBusinessStatus({
+      businessId,
+      status,
+      currentUser: req.user
+    });
+    res.json({
+      success: true,
+      message: `Business status successfully set to ${status}.`,
+      data: updated
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function getBusinessOverview(req, res, next) {
   try {
     const businessId = req.targetBusinessId || req.params.id;
@@ -70,5 +89,6 @@ export default {
   getBusiness,
   createBusiness,
   updateBusiness,
+  setBusinessStatus,
   getBusinessOverview
 };

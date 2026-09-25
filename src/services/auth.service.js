@@ -10,7 +10,7 @@ import { normalizePhoneNumber, isValidPhoneNumber } from '../utils/phone.util.js
 import { hashPin, verifyPin, isValidPin } from '../utils/pin.util.js';
 import { issueAccessToken } from '../utils/token.util.js';
 import { createSession, rotateSessionToken, revokeSession, revokeAllUserSessions } from './session.service.js';
-import { checkBruteForceLockout, handleFailedLoginAttempt, handleSuccessfulLogin } from './security.service.js';
+import { checkBruteForceLockout, handleFailedLoginAttempt, handleSuccessfulLogin, recordSecurityEvent } from './security.service.js';
 import { recordAuditEvent } from './audit.service.js';
 
 /**
@@ -50,20 +50,23 @@ export async function authenticateUser({
   const rawPin = (pin || secret || '').trim();
 
   if (!rawPhone || !rawPin) {
-    const err = new Error('Please provide your phone number and 6-digit PIN.');
+    const err = new Error('INVALID CREDENTIALS');
+    err.code = 'INVALID_CREDENTIALS';
     err.statusCode = 400;
     throw err;
   }
 
   const normalizedPhone = normalizePhoneNumber(rawPhone);
   if (!normalizedPhone || !isValidPhoneNumber(normalizedPhone)) {
-    const err = new Error('Invalid phone number format. Please enter a valid phone number (e.g. 0712 100 001 or +255712100001).');
+    const err = new Error('INVALID CREDENTIALS');
+    err.code = 'INVALID_CREDENTIALS';
     err.statusCode = 400;
     throw err;
   }
 
   if (!isValidPin(rawPin)) {
-    const err = new Error('Invalid PIN. PIN must be exactly 6 numeric digits.');
+    const err = new Error('INVALID CREDENTIALS');
+    err.code = 'INVALID_CREDENTIALS';
     err.statusCode = 400;
     throw err;
   }
@@ -71,7 +74,7 @@ export async function authenticateUser({
   // 1. Enforce brute-force lockout check on phone number & IP
   await checkBruteForceLockout(normalizedPhone, ipAddress);
 
-  // 2. Query user strictly by phone_number
+  // 2. Query user strictly by phone_number (supports both normalized E.164 and local format)
   const users = await query(
     `SELECT u.*, 
             b.name as business_name, b.business_code, b.currency_code as business_currency, 
@@ -82,13 +85,14 @@ export async function authenticateUser({
      FROM users u 
      LEFT JOIN businesses b ON u.business_id = b.id
      LEFT JOIN shops s ON u.shop_id = s.id 
-     WHERE u.phone_number = ? LIMIT 1`,
-    [normalizedPhone]
+     WHERE (u.phone_number = ? OR u.phone_number = ?) LIMIT 1`,
+    [normalizedPhone, rawPhone]
   );
 
   if (!users || users.length === 0) {
     await handleFailedLoginAttempt({ identifier: normalizedPhone, ipAddress, userAgent });
-    const err = new Error('Invalid credentials. Please verify your phone number and 6-digit PIN.');
+    const err = new Error('INVALID CREDENTIALS');
+    err.code = 'INVALID_CREDENTIALS';
     err.statusCode = 401;
     throw err;
   }
@@ -98,7 +102,8 @@ export async function authenticateUser({
   // 3. Verify credentials strictly against 6-digit PIN hash
   if (!user.pin_hash) {
     await handleFailedLoginAttempt({ identifier: normalizedPhone, ipAddress, userAgent });
-    const err = new Error('No PIN is configured for this account. Please contact your system administrator.');
+    const err = new Error('INVALID CREDENTIALS');
+    err.code = 'INVALID_CREDENTIALS';
     err.statusCode = 401;
     throw err;
   }
@@ -107,7 +112,8 @@ export async function authenticateUser({
 
   if (!isMatch) {
     await handleFailedLoginAttempt({ identifier: normalizedPhone, ipAddress, userAgent });
-    const err = new Error('Invalid credentials. Please verify your phone number and 6-digit PIN.');
+    const err = new Error('INVALID CREDENTIALS');
+    err.code = 'INVALID_CREDENTIALS';
     err.statusCode = 401;
     throw err;
   }
@@ -134,16 +140,33 @@ export async function authenticateUser({
       throw err;
     }
     if (user.business_status === BUSINESS_STATUS.SUSPENDED) {
-      const err = new Error('Your business account has been suspended. Please contact platform support.');
-      err.statusCode = 403;
-      err.code = 'BUSINESS_SUSPENDED';
+      await recordSecurityEvent({
+        eventType: 'LOGIN_BLOCKED_BUSINESS_SUSPENDED',
+        userId: user.id,
+        identifier: normalizedPhone,
+        ipAddress,
+        userAgent,
+        details: { businessId: user.business_id, businessName: user.business_name }
+      }).catch(() => {});
+      const err = new Error('INVALID CREDENTIALS');
+      err.statusCode = 401;
+      err.code = 'INVALID_CREDENTIALS';
       throw err;
     }
   }
 
   if (!user.is_active) {
-    const err = new Error('This user account has been deactivated. Please contact your administrator.');
-    err.statusCode = 403;
+    await recordSecurityEvent({
+      eventType: 'LOGIN_BLOCKED_USER_DEACTIVATED',
+      userId: user.id,
+      identifier: normalizedPhone,
+      ipAddress,
+      userAgent,
+      details: { role: user.role, businessId: user.business_id, shopId: user.shop_id }
+    }).catch(() => {});
+    const err = new Error('INVALID CREDENTIALS');
+    err.statusCode = 401;
+    err.code = 'INVALID_CREDENTIALS';
     throw err;
   }
 
@@ -181,6 +204,7 @@ export async function authenticateUser({
   return {
     accessToken,
     refreshToken: session.rawRefreshToken,
+    rawRefreshToken: session.rawRefreshToken,
     refreshTokenExpiresAt: session.expiresAt,
     sessionId: session.sessionId,
     redirect_url: getRoleDashboardRedirect(user.role),
@@ -256,8 +280,8 @@ export async function logoutAllSessions({ userId }) {
 export async function registerUser({ currentUser, userData }) {
   const { username, email, phone_number, password, pin, role, business_id, shop_id, full_name, profile_image } = userData;
 
-  if (!username || !email || !role || !full_name) {
-    const err = new Error('Username, email, role, and full_name are required.');
+  if (!role || !full_name) {
+    const err = new Error('Role and full_name are required.');
     err.statusCode = 400;
     throw err;
   }
@@ -267,7 +291,35 @@ export async function registerUser({ currentUser, userData }) {
   if (phone_number) {
     normalizedPhone = normalizePhoneNumber(phone_number);
     if (!normalizedPhone || !isValidPhoneNumber(normalizedPhone)) {
-      const err = new Error('Invalid phone number format.');
+      const err = new Error('Invalid phone number format (e.g. 0712 100 001 or +255712100001).');
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+
+  // Cashiers/Sellers require a phone number for POS counter login
+  if (role === ROLES.SELLER && !normalizedPhone) {
+    const err = new Error('A valid phone number is required for cashier sign in.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Auto-generate username and email for cashiers/sellers if not provided, or ensure presence for other roles
+  let finalUsername = username ? String(username).trim() : null;
+  let finalEmail = email ? String(email).trim() : null;
+
+  if (role === ROLES.SELLER) {
+    const phoneDigits = normalizedPhone ? normalizedPhone.replace(/\D/g, '') : Date.now();
+    if (!finalUsername) {
+      finalUsername = normalizedPhone || `seller_${phoneDigits}`;
+    }
+    if (!finalEmail) {
+      finalEmail = `${phoneDigits}@cashier.local`;
+    }
+  } else {
+    // For non-seller roles (admin, super_admin), username and email must be explicitly provided
+    if (!finalUsername || !finalEmail) {
+      const err = new Error('Username and email are required for administrative roles.');
       err.statusCode = 400;
       throw err;
     }
@@ -330,6 +382,10 @@ export async function registerUser({ currentUser, userData }) {
       assignedShopId = shops[0].id;
       assignedBusinessId = shops[0].business_id;
       isTempPin = true;
+
+      // Enforce subscription plan seller limit
+      const { enforceSellerLimit } = await import('./subscription.service.js');
+      await enforceSellerLimit(assignedBusinessId);
     } else if (role === ROLES.SUPER_ADMIN) {
       // Super Admin provisioning another Super Admin
       isTempPin = true;
@@ -342,12 +398,23 @@ export async function registerUser({ currentUser, userData }) {
 
   // Check unique collisions
   const existing = await query(
-    'SELECT id FROM users WHERE username = ? OR email = ? OR (phone_number IS NOT NULL AND phone_number = ?) LIMIT 1',
-    [username.trim(), email.trim(), normalizedPhone || '']
+    'SELECT id, username, email, phone_number FROM users WHERE username = ? OR email = ? OR (phone_number IS NOT NULL AND phone_number = ?) LIMIT 1',
+    [finalUsername, finalEmail, normalizedPhone || '']
   );
 
   if (existing && existing.length > 0) {
-    const err = new Error('Username, email, or phone number already exists in system.');
+    const match = existing[0];
+    if (normalizedPhone && match.phone_number === normalizedPhone) {
+      const err = new Error('A user account with this phone number already exists.');
+      err.statusCode = 409;
+      throw err;
+    }
+    if (match.username === finalUsername) {
+      const err = new Error('This username is already taken. Please choose another.');
+      err.statusCode = 409;
+      throw err;
+    }
+    const err = new Error('A user account with this email, username, or phone number already exists.');
     err.statusCode = 409;
     throw err;
   }
@@ -365,8 +432,8 @@ export async function registerUser({ currentUser, userData }) {
       (username, email, phone_number, pin_hash, profile_image, temporary_pin, role, business_id, shop_id, full_name, is_active)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)`,
     [
-      username.trim(),
-      email.trim(),
+      finalUsername,
+      finalEmail,
       normalizedPhone,
       pinHash,
       profile_image || null,
@@ -386,8 +453,8 @@ export async function registerUser({ currentUser, userData }) {
     shopId: assignedShopId,
     businessId: assignedBusinessId,
     changes: {
-      username: username.trim(),
-      email: email.trim(),
+      username: finalUsername,
+      email: finalEmail,
       phone_number: normalizedPhone,
       role,
       full_name: full_name.trim()
@@ -396,8 +463,8 @@ export async function registerUser({ currentUser, userData }) {
 
   return {
     id: result.insertId,
-    username: username.trim(),
-    email: email.trim(),
+    username: finalUsername,
+    email: finalEmail,
     phone_number: normalizedPhone,
     profile_image: profile_image || null,
     role,
@@ -411,33 +478,54 @@ export async function registerUser({ currentUser, userData }) {
 
 /**
  * Registers a new Business and Business Owner (Self-Service Onboarding)
- * Sets business status to 'payment_pending' awaiting manual payment confirmation by Platform Owner.
+/**
+ * Self-service Business & Owner Registration
+ * Automatically grants a 90-day Free Trial of the Starter Plan (1 shop, 1 seller).
+ * Eliminates payment requirement on registration so owner can log in immediately.
  */
-export async function registerBusinessAndOwner({
-  ownerName,
-  ownerPhone,
-  ownerEmail,
-  ownerPin,
-  businessName,
-  currencyCode = 'TZS',
-  planId,
-  termsVersion = 'v1.0',
-  registrationNotes = ''
-}) {
-  if (!ownerName || !ownerPhone || !ownerPin || !businessName || !planId) {
-    const err = new Error('Owner name, phone number, 6-digit PIN, business name, and selected plan are required.');
+export async function registerBusinessAndOwner(payload) {
+  const {
+    ownerName,
+    admin_name,
+    ownerPhone,
+    phone_number,
+    ownerEmail,
+    email,
+    ownerPin,
+    pin,
+    businessName,
+    business_name,
+    currencyCode = 'TZS',
+    currency_code,
+    planId,
+    plan_id,
+    termsVersion = 'v1.0',
+    registrationNotes = '',
+    notes
+  } = payload || {};
+
+  const resolvedOwnerName = (ownerName || admin_name || '').trim();
+  const resolvedPhone = (ownerPhone || phone_number || '').trim();
+  const resolvedEmail = (ownerEmail || email || '').trim();
+  const resolvedPin = (ownerPin || pin || '').trim();
+  const resolvedBizName = (businessName || business_name || '').trim();
+  const resolvedCurrency = (currency_code || currencyCode || 'TZS').trim().toUpperCase();
+  const resolvedNotes = (registrationNotes || notes || '').trim();
+
+  if (!resolvedOwnerName || !resolvedPhone || !resolvedPin || !resolvedBizName) {
+    const err = new Error('Owner name, phone number, 6-digit PIN, and business name are required.');
     err.statusCode = 400;
     throw err;
   }
 
-  const normalizedPhone = normalizePhoneNumber(ownerPhone);
+  const normalizedPhone = normalizePhoneNumber(resolvedPhone);
   if (!normalizedPhone || !isValidPhoneNumber(normalizedPhone)) {
     const err = new Error('Invalid phone number format (e.g. 0712 100 001 or +255712100001).');
     err.statusCode = 400;
     throw err;
   }
 
-  const cleanPin = String(ownerPin).trim();
+  const cleanPin = String(resolvedPin).trim();
   if (!isValidPin(cleanPin)) {
     const err = new Error('PIN must be exactly 6 numeric digits.');
     err.statusCode = 400;
@@ -447,7 +535,7 @@ export async function registerBusinessAndOwner({
   // Verify unique collision
   const existingUser = await query(
     'SELECT id FROM users WHERE phone_number = ? OR (email IS NOT NULL AND email = ?) LIMIT 1',
-    [normalizedPhone, (ownerEmail || '').trim()]
+    [normalizedPhone, resolvedEmail]
   );
   if (existingUser.length > 0) {
     const err = new Error('A user account with this phone number or email already exists.');
@@ -455,22 +543,32 @@ export async function registerBusinessAndOwner({
     throw err;
   }
 
-  // Verify plan exists & is active
-  const { getPlanById } = await import('./subscription.service.js');
-  const plan = await getPlanById(planId);
-  if (!plan.is_active) {
-    const err = new Error('The selected subscription plan is retired. Please choose an active plan.');
-    err.statusCode = 400;
-    throw err;
+  // Retrieve Starter plan (or explicitly selected active plan)
+  let plan = null;
+  const requestedPlanId = planId || plan_id;
+  if (requestedPlanId) {
+    try {
+      const { getPlanById } = await import('./subscription.service.js');
+      plan = await getPlanById(requestedPlanId);
+    } catch (_) {}
+  }
+  if (!plan) {
+    const starterPlans = await query("SELECT * FROM subscription_plans WHERE plan_code IN ('STARTER', 'STARTER_DAILY') AND is_active = TRUE ORDER BY id ASC LIMIT 1");
+    if (starterPlans.length > 0) {
+      plan = starterPlans[0];
+    } else {
+      const anyPlan = await query("SELECT * FROM subscription_plans WHERE is_active = TRUE ORDER BY id ASC LIMIT 1");
+      plan = anyPlan[0];
+    }
   }
 
   // Generate clean unique business code (e.g. BIZ03)
-  const [countRows] = await query('SELECT COUNT(*) as count FROM businesses');
-  const nextNum = (countRows[0].count || 0) + 1;
+  const countRows = await query('SELECT COUNT(*) as count FROM businesses');
+  const nextNum = (countRows[0]?.count || 0) + 1;
   const businessCode = `BIZ${String(nextNum).padStart(2, '0')}`;
 
   const pinHash = await hashPin(cleanPin);
-  const emailVal = ownerEmail && ownerEmail.trim() ? ownerEmail.trim() : `${normalizedPhone.replace('+', '')}@jmsolutions.local`;
+  const emailVal = resolvedEmail ? resolvedEmail : `${normalizedPhone.replace('+', '')}@jmsolutions.local`;
   const usernameVal = normalizedPhone;
 
   let newBusinessId = null;
@@ -479,32 +577,32 @@ export async function registerBusinessAndOwner({
   const { executeTransaction } = await import('../config/database.config.js');
 
   await executeTransaction(async (conn) => {
-    // 1. Insert business in 'payment_pending' / 'suspended' status
+    // 1. Insert business with immediate 90-day Free Trial on Starter Plan
     const [bizResult] = await conn.query(`
       INSERT INTO businesses 
-        (business_code, name, currency_code, currency_symbol, currency_name, status, subscription_plan_id, subscription_status, terms_accepted_version, terms_accepted_at, registration_notes)
-      VALUES (?, ?, ?, 'TSh', 'Tanzanian Shilling', 'suspended', ?, 'payment_pending', ?, NOW(), ?)
+        (business_code, name, currency_code, currency_symbol, currency_name, status, subscription_plan_id, subscription_status, subscription_start_date, subscription_end_date, terms_accepted_version, terms_accepted_at, registration_notes)
+      VALUES (?, ?, ?, 'TSh', 'Tanzanian Shilling', 'active', ?, 'trial', NOW(), DATE_ADD(NOW(), INTERVAL 90 DAY), ?, NOW(), ?)
     `, [
       businessCode,
-      businessName.trim(),
-      currencyCode.trim().toUpperCase(),
-      plan.id,
+      resolvedBizName,
+      resolvedCurrency,
+      plan?.id || null,
       termsVersion.trim(),
-      registrationNotes ? registrationNotes.trim() : null
+      resolvedNotes || 'Auto-enrolled into 90-day Free Starter Trial'
     ]);
     newBusinessId = bizResult.insertId;
 
-    // 2. Insert owner user account (initially inactive until platform approval)
+    // 2. Insert owner user account (active immediately for login)
     const [userResult] = await conn.query(`
       INSERT INTO users 
         (username, email, phone_number, pin_hash, full_name, role, business_id, is_active, temporary_pin)
-      VALUES (?, ?, ?, ?, ?, 'admin', ?, FALSE, FALSE)
+      VALUES (?, ?, ?, ?, ?, 'admin', ?, TRUE, FALSE)
     `, [
       usernameVal,
       emailVal,
       normalizedPhone,
       pinHash,
-      ownerName.trim(),
+      resolvedOwnerName,
       newBusinessId
     ]);
     newUserId = userResult.insertId;
@@ -512,7 +610,20 @@ export async function registerBusinessAndOwner({
     // 3. Link owner_user_id back to business
     await conn.query('UPDATE businesses SET owner_user_id = ? WHERE id = ?', [newUserId, newBusinessId]);
 
-    // 4. Record terms acceptance
+    // 4. Provision default primary shop branch for the business
+    const defaultShopCode = `SHP${String(newBusinessId).padStart(2, '0')}-01`;
+    await conn.query(`
+      INSERT INTO shops (business_id, shop_code, name, address, phone, currency_code, currency_symbol, currency_name, is_active)
+      VALUES (?, ?, ?, 'Main Branch', ?, ?, 'TSh', 'Tanzanian Shilling', TRUE)
+    `, [
+      newBusinessId,
+      defaultShopCode,
+      `${resolvedBizName} - Main Branch`,
+      normalizedPhone,
+      resolvedCurrency
+    ]);
+
+    // 5. Record terms acceptance
     await conn.query(`
       INSERT INTO business_terms_acceptance (business_id, user_id, terms_version)
       VALUES (?, ?, ?)
@@ -527,39 +638,40 @@ export async function registerBusinessAndOwner({
     targetId: newBusinessId,
     businessId: newBusinessId,
     changes: {
-      business_name: businessName.trim(),
+      business_name: resolvedBizName,
       business_code: businessCode,
-      owner_name: ownerName.trim(),
+      owner_name: resolvedOwnerName,
       owner_phone: normalizedPhone,
-      plan_code: plan.plan_code
+      plan_code: plan?.plan_code || 'STARTER',
+      subscription_status: 'trial',
+      trial_days: 90
     }
   });
 
-  // Fetch dynamic payment instructions & technical support contacts
-  const { getPublicPlatformConfig } = await import('./platform.service.js');
-  const platformConfig = await getPublicPlatformConfig();
-
   return {
     success: true,
-    message: 'Your business registration request has been submitted successfully.',
+    message: 'Your business has been registered successfully with 90 days of Free Starter Trial. You can sign in immediately.',
     data: {
       businessId: newBusinessId,
       businessCode,
-      businessName: businessName.trim(),
-      status: 'payment_pending',
+      businessName: resolvedBizName,
+      status: 'active',
+      subscriptionStatus: 'trial',
+      trialDaysRemaining: 90,
       plan: {
-        id: plan.id,
-        name: plan.name,
-        price: plan.price,
-        billing_cycle: plan.billing_cycle
+        id: plan?.id,
+        name: plan?.name || 'Starter Plan',
+        price: plan?.price || 0,
+        billing_cycle: plan?.billing_cycle || 'monthly',
+        max_shops: 1,
+        max_sellers: 1
       },
       owner: {
         id: newUserId,
-        name: ownerName.trim(),
+        name: resolvedOwnerName,
         phone: normalizedPhone
       },
-      support: platformConfig.support,
-      paymentMethods: platformConfig.paymentMethods
+      canLoginImmediately: true
     }
   };
 }

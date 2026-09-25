@@ -23,7 +23,9 @@ export async function checkBruteForceLockout(identifier, ipAddress) {
     const ipData = ipAttemptTracker.get(ipAddress);
     if (ipData && ipData.lockedUntil && ipData.lockedUntil > Date.now()) {
       const waitSeconds = Math.ceil((ipData.lockedUntil - Date.now()) / 1000);
-      const err = new Error(`Too many authentication failures from this network. Please retry in ${waitSeconds} seconds.`);
+      console.warn(`[SECURITY_LOCKOUT] IP ${ipAddress} locked out for another ${waitSeconds}s`);
+      const err = new Error('CANNOT EXECUTE NOW TRY LATER');
+      err.code = 'RATE_LIMITED';
       err.statusCode = 429;
       throw err;
     }
@@ -42,7 +44,9 @@ export async function checkBruteForceLockout(identifier, ipAddress) {
       const user = users[0];
       if (user.locked_until && new Date(user.locked_until) > new Date()) {
         const waitMinutes = Math.ceil((new Date(user.locked_until).getTime() - Date.now()) / 60000);
-        const err = new Error(`Account temporarily locked due to consecutive failed attempts. Please try again in ${waitMinutes} minute(s).`);
+        console.warn(`[SECURITY_LOCKOUT] Account ${identifier} locked out for another ${waitMinutes}m`);
+        const err = new Error('CANNOT EXECUTE NOW TRY LATER');
+        err.code = 'ACCOUNT_LOCKED';
         err.statusCode = 429;
         throw err;
       }

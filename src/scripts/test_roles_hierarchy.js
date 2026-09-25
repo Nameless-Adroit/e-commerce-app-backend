@@ -27,8 +27,8 @@ async function runTests() {
   // -----------------------------------------------------------------------------
   console.log('▶ SCENARIO 1: Super Admin Operations');
   const superAdminAuth = await authService.authenticateUser({
-    identifier: 'superadmin',
-    password: 'SuperAdmin123!'
+    identifier: '0700000001',
+    pin: '123456'
   });
   console.log('  ✅ Super Admin authenticated:', superAdminAuth.user.username);
 

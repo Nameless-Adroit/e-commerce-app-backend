@@ -133,7 +133,7 @@ export async function updateUserProfile(userId, { full_name, phone_number, profi
  * @returns {Promise<object>}
  */
 export async function adminUpdateUser({ targetUserId, updateData, currentUser }) {
-  const { full_name, phone_number, email, role, business_id, shop_id, profile_image, pin } = updateData;
+  const { full_name, phone_number, email, role, business_id, shop_id, profile_image, pin, is_active } = updateData;
 
   const users = await query('SELECT * FROM users WHERE id = ? LIMIT 1', [targetUserId]);
   if (!users || users.length === 0) {
@@ -230,13 +230,36 @@ export async function adminUpdateUser({ targetUserId, updateData, currentUser })
     auditDiff.pin = '[UPDATED]';
   }
 
+  if (is_active !== undefined) {
+    const nextActiveState = Boolean(is_active);
+
+    // If reactivating a seller, verify that active seller quota is not exceeded
+    if (nextActiveState && !targetUser.is_active && targetUser.role === ROLES.SELLER && targetUser.business_id) {
+      const { enforceSellerLimit } = await import('./subscription.service.js');
+      await enforceSellerLimit(targetUser.business_id);
+    }
+
+    fields.push('is_active = ?');
+    params.push(nextActiveState ? 1 : 0);
+    auditDiff.is_active = nextActiveState;
+
+    // If deactivating / suspending user, immediately revoke all active sessions
+    if (!nextActiveState) {
+      await query('UPDATE sessions SET is_revoked = TRUE, revoke_reason = "account_suspended" WHERE user_id = ?', [targetUserId]);
+    }
+  }
+
   if (fields.length > 0) {
     params.push(targetUserId);
     await query(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, params);
 
+    const auditAction = is_active !== undefined
+      ? (is_active ? 'USER_ACTIVATED' : 'USER_SUSPENDED')
+      : 'ADMIN_USER_UPDATED';
+
     await recordAuditEvent({
       userId: currentUser.id,
-      action: 'ADMIN_USER_UPDATED',
+      action: auditAction,
       targetResource: 'users',
       targetId: targetUserId,
       shopId: targetUser.shop_id,

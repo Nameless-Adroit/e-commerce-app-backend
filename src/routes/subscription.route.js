@@ -57,6 +57,23 @@ router.get(
   subscriptionController.getMySubscription
 );
 
+// Support both /my and /business endpoints for mobile client compatibility
+router.get(
+  '/business',
+  authenticateToken,
+  authorize([ROLES.ADMIN]),
+  subscriptionController.getMySubscription
+);
+
+// Support /business/:businessId as alias for /:businessId
+router.get(
+  '/business/:businessId',
+  authenticateToken,
+  authorize([ROLES.SUPER_ADMIN, ROLES.ADMIN]),
+  enforceBusinessScope,
+  subscriptionController.getBusinessSubscription
+);
+
 // -----------------------------------------------------------------------------
 // 3. Platform Administration Billing & History
 // -----------------------------------------------------------------------------

@@ -184,10 +184,13 @@ export async function updateSettings(req, res, next) {
 
 export async function listPaymentMethods(req, res, next) {
   try {
-    const methods = await platformService.listPaymentMethods({ activeOnly: req.query.all !== 'true' });
+    const isSuperAdmin = req.user && req.user.role === 'super_admin';
+    const activeOnly = !isSuperAdmin || req.query.all !== 'true';
+    const methods = await platformService.listPaymentMethods({ activeOnly });
     res.status(200).json({
       success: true,
-      data: { paymentMethods: methods }
+      data: methods,
+      paymentMethods: methods
     });
   } catch (err) {
     next(err);

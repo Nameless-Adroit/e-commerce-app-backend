@@ -31,12 +31,19 @@ export async function getPublicPlatformConfig() {
   };
 
   // 2. Active Payment Methods (instructions for manual payment)
-  const paymentMethods = await query(`
-    SELECT id, name, type, account_name, account_number, instructions
+  const paymentMethodsRows = await query(`
+    SELECT id, name, type, account_name, account_number, instructions, is_active
     FROM payment_methods
     WHERE is_active = TRUE
     ORDER BY id ASC
   `);
+
+  const formattedPaymentMethods = paymentMethodsRows.map(pm => ({
+    ...pm,
+    provider_name: pm.name,
+    channel_type: (pm.type || 'MOBILE_MONEY').toLowerCase(),
+    is_active: pm.is_active !== undefined ? Boolean(pm.is_active) : true
+  }));
 
   // 3. Active Subscription Plans
   const plans = await listPlans({ activeOnly: true });
@@ -54,7 +61,16 @@ export async function getPublicPlatformConfig() {
       version: settings.terms_version,
       content: settings.terms_content
     },
-    paymentMethods,
+    settings: {
+      platform_name: settings.platform_name,
+      support_phone: settings.support_phone,
+      support_email: settings.support_email,
+      terms_and_conditions: settings.terms_content,
+      privacy_policy: settings.terms_content,
+      registration_instructions: 'Complete the steps below and submit your payment verification code.'
+    },
+    paymentMethods: formattedPaymentMethods,
+    payment_methods: formattedPaymentMethods,
     plans
   };
 }
@@ -174,12 +190,25 @@ export async function updatePlatformSettings(updates, currentUser) {
 export async function listPaymentMethods({ activeOnly = false } = {}) {
   const where = activeOnly ? 'WHERE is_active = TRUE' : '';
   const sql = `SELECT * FROM payment_methods ${where} ORDER BY id ASC`;
-  return query(sql);
+  const rows = await query(sql);
+  return rows.map(pm => ({
+    ...pm,
+    provider_name: pm.name,
+    channel_type: (pm.type || 'MOBILE_MONEY').toLowerCase(),
+    is_active: pm.is_active !== undefined ? Boolean(pm.is_active) : true
+  }));
 }
 
-export async function createPaymentMethod({ name, type, account_name, account_number, instructions, currentUser }) {
-  if (!name || !type || !account_name || !account_number) {
-    const err = new Error('Name, type, account name, and account number are required.');
+export async function createPaymentMethod({ name, provider_name, type, channel_type, account_name, account_number, instructions, currentUser }) {
+  const resolvedName = (name || provider_name || '').trim();
+  const rawType = (type || channel_type || 'MOBILE_MONEY').toUpperCase();
+  const validTypes = ['MOBILE_MONEY', 'BANK_TRANSFER', 'CASH', 'OTHER'];
+  const resolvedType = validTypes.includes(rawType) ? rawType : 'OTHER';
+  const resolvedAccName = (account_name || '').trim();
+  const resolvedAccNumber = (account_number || '').trim();
+
+  if (!resolvedName || !resolvedAccName || !resolvedAccNumber) {
+    const err = new Error('Name, account name, and account number are required.');
     err.statusCode = 400;
     throw err;
   }
@@ -188,10 +217,10 @@ export async function createPaymentMethod({ name, type, account_name, account_nu
     INSERT INTO payment_methods (name, type, account_name, account_number, instructions, is_active)
     VALUES (?, ?, ?, ?, ?, TRUE)
   `, [
-    name.trim(),
-    type,
-    account_name.trim(),
-    account_number.trim(),
+    resolvedName,
+    resolvedType,
+    resolvedAccName,
+    resolvedAccNumber,
     instructions ? instructions.trim() : ''
   ]);
 
@@ -201,21 +230,32 @@ export async function createPaymentMethod({ name, type, account_name, account_nu
       action: 'PAYMENT_METHOD_CREATED',
       targetResource: 'payment_methods',
       targetId: result.insertId,
-      changes: { name, type, account_number }
+      changes: { name: resolvedName, type: resolvedType, account_number: resolvedAccNumber }
     });
   }
 
   const rows = await query('SELECT * FROM payment_methods WHERE id = ?', [result.insertId]);
-  return rows[0];
+  const created = rows[0];
+  return {
+    ...created,
+    provider_name: created.name,
+    channel_type: (created.type || 'MOBILE_MONEY').toLowerCase()
+  };
 }
 
 export async function updatePaymentMethod(methodId, updates, currentUser) {
-  const { name, type, account_name, account_number, instructions, is_active } = updates;
+  const resolvedName = updates.name !== undefined ? updates.name : updates.provider_name;
+  let resolvedType = updates.type !== undefined ? updates.type : (updates.channel_type ? updates.channel_type.toUpperCase() : undefined);
+  if (resolvedType) {
+    const validTypes = ['MOBILE_MONEY', 'BANK_TRANSFER', 'CASH', 'OTHER'];
+    resolvedType = validTypes.includes(resolvedType) ? resolvedType : 'OTHER';
+  }
+  const { account_name, account_number, instructions, is_active } = updates;
   const fields = [];
   const params = [];
 
-  if (name !== undefined) { fields.push('name = ?'); params.push(name.trim()); }
-  if (type !== undefined) { fields.push('type = ?'); params.push(type); }
+  if (resolvedName !== undefined) { fields.push('name = ?'); params.push(resolvedName.trim()); }
+  if (resolvedType !== undefined) { fields.push('type = ?'); params.push(resolvedType); }
   if (account_name !== undefined) { fields.push('account_name = ?'); params.push(account_name.trim()); }
   if (account_number !== undefined) { fields.push('account_number = ?'); params.push(account_number.trim()); }
   if (instructions !== undefined) { fields.push('instructions = ?'); params.push(instructions.trim()); }
@@ -237,7 +277,12 @@ export async function updatePaymentMethod(methodId, updates, currentUser) {
   }
 
   const rows = await query('SELECT * FROM payment_methods WHERE id = ?', [methodId]);
-  return rows[0];
+  const updated = rows[0];
+  return {
+    ...updated,
+    provider_name: updated?.name,
+    channel_type: (updated?.type || 'MOBILE_MONEY').toLowerCase()
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -455,34 +500,37 @@ export async function declineRegistrationRequest(businessId, { rejectionReason, 
 // -----------------------------------------------------------------------------
 
 export async function getPlatformDashboardMetrics() {
-  const [totalBizRows] = await query('SELECT COUNT(*) as count FROM businesses');
-  const [activeBizRows] = await query("SELECT COUNT(*) as count FROM businesses WHERE status = 'active' AND subscription_status = 'active'");
-  const [pendingReqRows] = await query("SELECT COUNT(*) as count FROM businesses WHERE subscription_status IN ('payment_pending', 'payment_received', 'pending_review', 'draft')");
-  const [expiredBizRows] = await query(`
+  const [totalBiz] = await query('SELECT COUNT(*) as count FROM businesses');
+  const [activeBiz] = await query("SELECT COUNT(*) as count FROM businesses WHERE status = 'active' AND subscription_status IN ('active', 'trial')");
+  const [pendingReq] = await query("SELECT COUNT(*) as count FROM businesses WHERE subscription_status IN ('payment_pending', 'payment_received', 'pending_review', 'draft')");
+  const [expiredBiz] = await query(`
     SELECT COUNT(*) as count 
     FROM businesses 
     WHERE subscription_status = 'expired' OR (subscription_end_date IS NOT NULL AND subscription_end_date < NOW())
   `);
   const [revenueRows] = await query('SELECT COALESCE(SUM(amount), 0) as total FROM subscription_payments');
-  const [expiringSoonRows] = await query(`
+  const [expiringSoon] = await query(`
     SELECT COUNT(*) as count 
     FROM businesses 
-    WHERE subscription_status = 'active' 
+    WHERE subscription_status IN ('active', 'trial') 
       AND subscription_end_date IS NOT NULL 
       AND subscription_end_date BETWEEN NOW() AND DATE_ADD(NOW(), INTERVAL 30 DAY)
   `);
 
   // Active shops & sellers counts
-  const [activeShopsRows] = await query("SELECT COUNT(*) as count FROM shops WHERE is_active = TRUE").catch(() => [{ count: 0 }]);
-  const [activeSellersRows] = await query("SELECT COUNT(*) as count FROM users WHERE role = 'seller' AND is_active = TRUE").catch(() => [{ count: 0 }]);
+  const [activeShops] = await query("SELECT COUNT(*) as count FROM shops WHERE is_active = TRUE").catch(() => [{ count: 0 }]);
+  const [activeSellers] = await query("SELECT COUNT(*) as count FROM users WHERE role = 'seller' AND is_active = TRUE").catch(() => [{ count: 0 }]);
 
-  // Expiring businesses (<= 30 days or already expired)
+  // Expiring businesses (strictly <= 30 days or already expired)
   const expiringBusinessesRows = await query(`
     SELECT b.id, b.name, b.business_code, b.subscription_status, b.subscription_end_date, p.name as plan_name
     FROM businesses b
     LEFT JOIN subscription_plans p ON b.subscription_plan_id = p.id
-    WHERE b.subscription_status IN ('active', 'expired') 
-       OR (b.subscription_end_date IS NOT NULL AND b.subscription_end_date <= DATE_ADD(NOW(), INTERVAL 30 DAY))
+    WHERE b.subscription_end_date IS NOT NULL 
+      AND (
+        (b.subscription_status IN ('active', 'trial') AND b.subscription_end_date <= DATE_ADD(NOW(), INTERVAL 30 DAY))
+        OR b.subscription_status = 'expired'
+      )
     ORDER BY b.subscription_end_date ASC
     LIMIT 20
   `).catch(() => []);
@@ -494,6 +542,7 @@ export async function getPlatformDashboardMetrics() {
       id: b.id,
       name: b.name,
       business_code: b.business_code,
+      subscription_status: b.subscription_status,
       subscription_end_date: b.subscription_end_date,
       days_remaining: daysRemaining,
       warning_level: warningLevel,
@@ -522,14 +571,14 @@ export async function getPlatformDashboardMetrics() {
     LIMIT 5
   `).catch(() => []);
 
-  const totalBusinesses = parseInt(totalBizRows[0]?.count || 0, 10);
-  const activeBusinesses = parseInt(activeBizRows[0]?.count || 0, 10);
-  const pendingRegistrations = parseInt(pendingReqRows[0]?.count || 0, 10);
-  const expiredBusinesses = parseInt(expiredBizRows[0]?.count || 0, 10);
-  const expiringSoonCount = parseInt(expiringSoonRows[0]?.count || 0, 10);
-  const totalRevenue = parseFloat(revenueRows[0]?.total || 0);
-  const totalActiveShops = parseInt(activeShopsRows[0]?.count || 0, 10);
-  const totalActiveSellers = parseInt(activeSellersRows[0]?.count || 0, 10);
+  const totalBusinesses = parseInt(totalBiz?.count || 0, 10);
+  const activeBusinesses = parseInt(activeBiz?.count || 0, 10);
+  const pendingRegistrations = parseInt(pendingReq?.count || 0, 10);
+  const expiredBusinesses = parseInt(expiredBiz?.count || 0, 10);
+  const expiringSoonCount = parseInt(expiringSoon?.count || 0, 10);
+  const totalRevenue = parseFloat(revenueRows?.total || 0);
+  const totalActiveShops = parseInt(activeShops?.count || 0, 10);
+  const totalActiveSellers = parseInt(activeSellers?.count || 0, 10);
 
   return {
     total_businesses: totalBusinesses,

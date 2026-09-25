@@ -1,6 +1,7 @@
 /**
  * Automated Test Suite: Subscription Calculations, Renewal Arithmetic, Warning Thresholds & Notification Abstraction
  */
+import '../utils/logger.util.js';
 import assert from 'assert';
 import { 
   calculateDaysRemaining, 
@@ -145,6 +146,30 @@ async function runSuite() {
     });
 
     assert.strictEqual(periodEnd.getFullYear(), periodStart.getFullYear() + 2);
+  });
+
+  report('Handles daily subscription renewals (+1 day per cycle)', () => {
+    const now = new Date();
+    const { periodStart, periodEnd } = calculateRenewalDates({
+      currentEndDate: now,
+      billingCycle: 'daily',
+      cycles: 3
+    });
+
+    const diffDays = Math.round((periodEnd.getTime() - periodStart.getTime()) / (1000 * 60 * 60 * 24));
+    assert.strictEqual(diffDays, 3);
+  });
+
+  report('Handles weekly subscription renewals (+7 days per cycle)', () => {
+    const now = new Date();
+    const { periodStart, periodEnd } = calculateRenewalDates({
+      currentEndDate: now,
+      billingCycle: 'weekly',
+      cycles: 2
+    });
+
+    const diffDays = Math.round((periodEnd.getTime() - periodStart.getTime()) / (1000 * 60 * 60 * 24));
+    assert.strictEqual(diffDays, 14);
   });
 
   // ---------------------------------------------------------------------------

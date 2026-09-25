@@ -47,7 +47,14 @@ router.put(
   businessController.updateBusiness
 );
 
-// 6. Admin / Super Admin: Business overview metrics
+// 6. Super Admin: Suspend or activate a business
+router.put(
+  '/:id/status',
+  authorize([ROLES.SUPER_ADMIN]),
+  businessController.setBusinessStatus
+);
+
+// 7. Admin / Super Admin: Business overview metrics
 router.get(
   '/:id/overview',
   authorize([ROLES.SUPER_ADMIN, ROLES.ADMIN]),

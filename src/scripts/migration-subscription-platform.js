@@ -28,7 +28,7 @@ export async function runSubscriptionPlatformMigration() {
         \`plan_code\` VARCHAR(50) NOT NULL UNIQUE,
         \`name\` VARCHAR(100) NOT NULL,
         \`price\` DECIMAL(12, 2) NOT NULL,
-        \`billing_cycle\` ENUM('monthly', 'yearly') NOT NULL DEFAULT 'monthly',
+        \`billing_cycle\` ENUM('daily', 'weekly', 'monthly', 'yearly') NOT NULL DEFAULT 'monthly',
         \`max_shops\` INT NOT NULL DEFAULT 1,
         \`max_sellers\` INT NULL COMMENT 'NULL indicates unlimited sellers',
         \`is_active\` BOOLEAN NOT NULL DEFAULT TRUE,
@@ -39,22 +39,54 @@ export async function runSubscriptionPlatformMigration() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
-    // Seed default subscription plans if table is empty
-    const existingPlans = await query('SELECT COUNT(*) as count FROM subscription_plans');
-    if (existingPlans[0].count === 0) {
-      console.log('🌱 Seeding initial subscription plans...');
+    // Ensure billing_cycle column supports daily and weekly
+    try {
       await query(`
-        INSERT INTO \`subscription_plans\` (\`plan_code\`, \`name\`, \`price\`, \`billing_cycle\`, \`max_shops\`, \`max_sellers\`, \`is_active\`)
-        VALUES 
-          ('STARTER', 'Starter Plan', 25000.00, 'monthly', 1, 2, TRUE),
-          ('BUSINESS', 'Business Growth', 60000.00, 'monthly', 3, 10, TRUE),
-          ('ENTERPRISE', 'Enterprise Retail', 150000.00, 'monthly', 10, NULL, TRUE),
-          ('STARTER_YEARLY', 'Starter Annual', 250000.00, 'yearly', 1, 2, TRUE),
-          ('BUSINESS_YEARLY', 'Business Annual', 600000.00, 'yearly', 3, 10, TRUE),
-          ('ENTERPRISE_YEARLY', 'Enterprise Annual', 1500000.00, 'yearly', 10, NULL, TRUE)
+        ALTER TABLE \`subscription_plans\` 
+        MODIFY COLUMN \`billing_cycle\` ENUM('daily', 'weekly', 'monthly', 'yearly') NOT NULL DEFAULT 'monthly'
       `);
-      console.log('✅ Initial subscription plans seeded.');
+      console.log('✅ subscription_plans.billing_cycle updated to support daily, weekly, monthly, yearly');
+    } catch (enumErr) {
+      console.log('ℹ️ Notice updating billing_cycle enum:', enumErr.message);
     }
+
+    // Seed or update subscription plans
+    console.log('🌱 Upserting revised subscription plans (Starter: 1 shop, 1 seller; Daily, Weekly, Monthly, Yearly)...');
+    const plansToSeed = [
+      // Starter (1 shop, 1 seller): Daily 200, Weekly 1,350 (~3.6%), Monthly 5,500 (~8.3%), Yearly 66,000 (~9.6%)
+      { code: 'STARTER_DAILY', name: 'Starter Daily', price: 200.00, cycle: 'daily', shops: 1, sellers: 1 },
+      { code: 'STARTER_WEEKLY', name: 'Starter Weekly', price: 1350.00, cycle: 'weekly', shops: 1, sellers: 1 },
+      { code: 'STARTER', name: 'Starter Monthly', price: 5500.00, cycle: 'monthly', shops: 1, sellers: 1 },
+      { code: 'STARTER_YEARLY', name: 'Starter Annual', price: 66000.00, cycle: 'yearly', shops: 1, sellers: 1 },
+
+      // Business (3 shops, 5 sellers): Daily 500, Weekly 3,300 (~5.7%), Monthly 13,800 (~8.0%), Yearly 165,000 (~9.6%)
+      { code: 'BUSINESS_DAILY', name: 'Business Daily', price: 500.00, cycle: 'daily', shops: 3, sellers: 5 },
+      { code: 'BUSINESS_WEEKLY', name: 'Business Weekly', price: 3300.00, cycle: 'weekly', shops: 3, sellers: 5 },
+      { code: 'BUSINESS', name: 'Business Monthly', price: 13800.00, cycle: 'monthly', shops: 3, sellers: 5 },
+      { code: 'BUSINESS_YEARLY', name: 'Business Annual', price: 165000.00, cycle: 'yearly', shops: 3, sellers: 5 },
+
+      // Enterprise (10 shops, 20 sellers): Daily 1,200, Weekly 7,900 (~6.0%), Monthly 33,000 (~8.3%), Yearly 396,000 (~9.6%)
+      { code: 'ENTERPRISE_DAILY', name: 'Enterprise Daily', price: 1200.00, cycle: 'daily', shops: 10, sellers: 20 },
+      { code: 'ENTERPRISE_WEEKLY', name: 'Enterprise Weekly', price: 7900.00, cycle: 'weekly', shops: 10, sellers: 20 },
+      { code: 'ENTERPRISE', name: 'Enterprise Monthly', price: 33000.00, cycle: 'monthly', shops: 10, sellers: 20 },
+      { code: 'ENTERPRISE_YEARLY', name: 'Enterprise Annual', price: 396000.00, cycle: 'yearly', shops: 10, sellers: 20 }
+    ];
+
+    for (const p of plansToSeed) {
+      await query(`
+        INSERT INTO \`subscription_plans\` 
+          (\`plan_code\`, \`name\`, \`price\`, \`billing_cycle\`, \`max_shops\`, \`max_sellers\`, \`is_active\`)
+        VALUES (?, ?, ?, ?, ?, ?, TRUE)
+        ON DUPLICATE KEY UPDATE
+          \`name\` = VALUES(\`name\`),
+          \`price\` = VALUES(\`price\`),
+          \`billing_cycle\` = VALUES(\`billing_cycle\`),
+          \`max_shops\` = VALUES(\`max_shops\`),
+          \`max_sellers\` = VALUES(\`max_sellers\`),
+          \`is_active\` = TRUE
+      `, [p.code, p.name, p.price, p.cycle, p.shops, p.sellers]);
+    }
+    console.log('✅ Subscription plans seeded and updated.');
 
     // 2. Extend businesses table with subscription fields and registration state
     console.log('📦 Updating `businesses` table with subscription & registration fields...');

@@ -11,6 +11,10 @@ import {
   REFRESH_TOKEN_LIFETIME_MS 
 } from '../utils/token.util.js';
 import { recordSecurityEvent } from './security.service.js';
+import { ROLES, BUSINESS_STATUS } from '../config/constants.js';
+
+// In-memory registry of rotated refresh token hashes to immediately catch token reuse
+const rotatedTokensTracker = new Map();
 
 /**
  * Creates a new authenticated device session.
@@ -57,6 +61,13 @@ export async function createSession({ userId, deviceName, deviceId, ipAddress, u
 
   return {
     sessionId,
+    session: {
+      id: sessionId,
+      user_id: userId,
+      userId,
+      token_family_id: tokenFamilyId,
+      expires_at: expiresAt
+    },
     tokenFamilyId,
     rawRefreshToken,
     expiresAt
@@ -85,16 +96,86 @@ export async function rotateSessionToken({ rawRefreshToken, ipAddress, userAgent
 
   // 1. Look up session by active refresh token hash
   const sessions = await query(
-    `SELECT s.*, u.role, u.business_id, u.shop_id, u.is_active, u.username, u.full_name
+    `SELECT s.*, u.role, u.business_id, u.shop_id, u.is_active, u.username, u.full_name,
+            b.status as business_status, b.subscription_status
      FROM sessions s
      JOIN users u ON s.user_id = u.id
+     LEFT JOIN businesses b ON u.business_id = b.id
      WHERE s.refresh_token_hash = ? LIMIT 1`,
     [tokenHash]
   );
 
   // 2. If no active session matches this hash, inspect if it belongs to a compromised or already-rotated family
   if (!sessions || sessions.length === 0) {
-    // Check if token was previously recorded in security logs or invalidated session
+    const reuseEntry = rotatedTokensTracker.get(tokenHash);
+
+    if (reuseEntry) {
+      if (reuseEntry.tokenFamilyId) {
+        await query(
+          'UPDATE sessions SET is_revoked = TRUE, revoke_reason = "family_reuse_detected" WHERE token_family_id = ? OR id = ?',
+          [reuseEntry.tokenFamilyId, reuseEntry.sessionId]
+        );
+      } else if (reuseEntry.sessionId) {
+        await query(
+          'UPDATE sessions SET is_revoked = TRUE, revoke_reason = "family_reuse_detected" WHERE id = ?',
+          [reuseEntry.sessionId]
+        );
+      }
+
+      await recordSecurityEvent({
+        eventType: 'TOKEN_REFRESH_REUSE',
+        userId: reuseEntry.userId,
+        ipAddress,
+        userAgent,
+        details: { tokenHashPrefix: tokenHash.slice(0, 16), tokenFamilyId: reuseEntry.tokenFamilyId }
+      });
+
+      const err = new Error('Token reuse detected. Session revoked for security.');
+      err.statusCode = 401;
+      throw err;
+    }
+
+    const pastLogs = await query(
+      `SELECT * FROM security_logs 
+       WHERE event_type = 'TOKEN_REFRESH' 
+         AND JSON_UNQUOTE(JSON_EXTRACT(details, '$.previousTokenHash')) = ? 
+       ORDER BY id DESC LIMIT 1`,
+      [tokenHash]
+    );
+
+    if (pastLogs && pastLogs.length > 0) {
+      const logDetails = typeof pastLogs[0].details === 'string' 
+        ? JSON.parse(pastLogs[0].details) 
+        : pastLogs[0].details;
+      
+      const compromisedFamilyId = logDetails?.tokenFamilyId;
+      const compromisedSessionId = logDetails?.sessionId;
+
+      if (compromisedFamilyId) {
+        await query(
+          'UPDATE sessions SET is_revoked = TRUE, revoke_reason = "family_reuse_detected" WHERE token_family_id = ?',
+          [compromisedFamilyId]
+        );
+      } else if (compromisedSessionId) {
+        await query(
+          'UPDATE sessions SET is_revoked = TRUE, revoke_reason = "family_reuse_detected" WHERE id = ?',
+          [compromisedSessionId]
+        );
+      }
+
+      await recordSecurityEvent({
+        eventType: 'TOKEN_REFRESH_REUSE',
+        userId: pastLogs[0].user_id,
+        ipAddress,
+        userAgent,
+        details: { tokenHashPrefix: tokenHash.slice(0, 16), tokenFamilyId: compromisedFamilyId }
+      });
+
+      const err = new Error('Token reuse detected. Session revoked for security.');
+      err.statusCode = 401;
+      throw err;
+    }
+
     await recordSecurityEvent({
       eventType: 'TOKEN_REFRESH_REUSE',
       userId: null,
@@ -118,7 +199,15 @@ export async function rotateSessionToken({ rawRefreshToken, ipAddress, userAgent
     throw err;
   }
 
-  // 4. Verify session not revoked
+  // 4. Verify business active status
+  if (session.role !== ROLES.SUPER_ADMIN && session.business_status === BUSINESS_STATUS.SUSPENDED) {
+    await revokeSession(session.id, 'business_suspended');
+    const err = new Error('Business account has been suspended.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  // 5. Verify session not revoked
   if (session.is_revoked) {
     // Critical: A revoked token is being presented! Revoke entire family to stop attacker.
     await query(
@@ -170,12 +259,24 @@ export async function rotateSessionToken({ rawRefreshToken, ipAddress, userAgent
     ]
   );
 
+  // Track previous token hash to thwart token replay attacks
+  rotatedTokensTracker.set(tokenHash, {
+    sessionId: session.id,
+    tokenFamilyId: session.token_family_id,
+    userId: session.user_id,
+    rotatedAt: Date.now()
+  });
+
   await recordSecurityEvent({
     eventType: 'TOKEN_REFRESH',
     userId: session.user_id,
     ipAddress,
     userAgent,
-    details: { sessionId: session.id }
+    details: { 
+      sessionId: session.id,
+      previousTokenHash: tokenHash,
+      tokenFamilyId: session.token_family_id
+    }
   });
 
   return {

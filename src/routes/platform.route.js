@@ -21,6 +21,9 @@ router.get('/config', platformController.getPublicConfig);
 router.post('/auth/login', authRateLimiter, platformController.platformLogin);
 router.post('/auth/refresh', authRateLimiter, platformController.platformRefresh);
 
+// Payment Methods: Active methods readable by authenticated clients / mobile app
+router.get('/payment-methods', platformController.listPaymentMethods);
+
 // -----------------------------------------------------------------------------
 // 3. Protected Platform Owner Operations (All require token & Platform Owner role)
 // -----------------------------------------------------------------------------
@@ -39,8 +42,7 @@ router.post('/registrations/:id/decline', platformController.declineRegistration
 router.get('/settings', platformController.getSettings);
 router.put('/settings', platformController.updateSettings);
 
-// Manual Payment Methods
-router.get('/payment-methods', platformController.listPaymentMethods);
+// Manual Payment Methods - Management (Create / Update restricted to Platform Owner)
 router.post('/payment-methods', platformController.createPaymentMethod);
 router.put('/payment-methods/:id', platformController.updatePaymentMethod);
 

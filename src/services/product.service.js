@@ -177,8 +177,8 @@ export async function getProductById(productIdOrObj, maybeShopId) {
 /**
  * List products with pagination, category filter, and search
  */
-export async function listProducts({ shopId, filters }) {
-  const { search, category, low_stock, limit = 50, offset = 0 } = filters;
+export async function listProducts({ shopId, filters = {} } = {}) {
+  const { search, category, low_stock, limit = 50, offset = 0 } = filters || {};
 
   let whereClauses = [];
   let params = [];
