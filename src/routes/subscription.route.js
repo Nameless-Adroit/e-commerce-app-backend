@@ -74,6 +74,24 @@ router.get(
   subscriptionController.getBusinessSubscription
 );
 
+// Support /business/:businessId/history as alias
+router.get(
+  '/business/:businessId/history',
+  authenticateToken,
+  authorize([ROLES.SUPER_ADMIN, ROLES.ADMIN]),
+  enforceBusinessScope,
+  subscriptionController.getBusinessHistory
+);
+
+// Support /business/:businessId/renew for mobile app and client compatibility
+router.post(
+  '/business/:businessId/renew',
+  authenticateToken,
+  authorize([ROLES.SUPER_ADMIN, ROLES.ADMIN]),
+  enforceBusinessScope,
+  subscriptionController.renewSubscription
+);
+
 // -----------------------------------------------------------------------------
 // 3. Platform Administration Billing & History
 // -----------------------------------------------------------------------------
@@ -103,11 +121,12 @@ router.get(
   subscriptionController.getBusinessHistory
 );
 
-// Platform Owner: Renew business subscription & record manual payment
+// Platform Owner or Business Owner: Renew business subscription & record manual payment
 router.post(
   '/:businessId/renew',
   authenticateToken,
-  requirePlatformOwner,
+  authorize([ROLES.SUPER_ADMIN, ROLES.ADMIN]),
+  enforceBusinessScope,
   subscriptionController.renewSubscription
 );
 

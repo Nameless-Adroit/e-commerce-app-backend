@@ -342,6 +342,7 @@ export async function getBusinessSubscription(businessId) {
     active_sellers_count: parseInt(b.sellers_count, 10) || 0,
     max_sellers: b.max_sellers !== null ? parseInt(b.max_sellers, 10) : null,
     is_expired: b.subscription_status === 'expired' || daysRemaining <= 0,
+    payments: await getSubscriptionHistory(businessId),
     usage: {
       current_shops: parseInt(b.shops_count, 10) || 0,
       max_shops: b.max_shops ? parseInt(b.max_shops, 10) : 1,
@@ -448,16 +449,23 @@ export async function listBusinessesBilling() {
 export async function renewBusinessSubscription({
   businessId,
   planId,
+  plan_id,
   cycles = 1,
   amountPaid,
-  paymentMethod = 'CASH',
-  paymentReference = '',
+  amount,
+  paymentMethod,
+  payment_method,
+  paymentReference,
+  payment_reference,
   notes = '',
   currentUser
 }) {
   const parsedBusinessId = parseInt(businessId, 10);
-  const parsedPlanId = parseInt(planId, 10);
-  const numCycles = Math.max(1, parseInt(cycles, 10) || 1);
+  if (isNaN(parsedBusinessId)) {
+    const err = new Error('Invalid business ID.');
+    err.statusCode = 400;
+    throw err;
+  }
 
   // 1. Fetch current business state
   const businessRows = await query(`
@@ -474,13 +482,27 @@ export async function renewBusinessSubscription({
   }
   const business = businessRows[0];
 
-  // 2. Fetch target plan
+  // 2. Fetch target plan (fallback to current plan if not provided)
+  const targetPlanId = planId || plan_id || business.subscription_plan_id;
+  if (!targetPlanId) {
+    const err = new Error('No subscription plan specified or found for this business.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const parsedPlanId = parseInt(targetPlanId, 10);
   const plan = await getPlanById(parsedPlanId);
 
   // 3. Expected price calculation & validation
+  const numCycles = Math.max(1, parseInt(cycles, 10) || 1);
   const expectedAmount = plan.price * numCycles;
-  const recordedAmount = parseFloat(amountPaid);
 
+  const rawAmount = (amountPaid !== undefined && amountPaid !== null && amountPaid !== '')
+    ? amountPaid
+    : (amount !== undefined && amount !== null && amount !== '')
+      ? amount
+      : expectedAmount;
+
+  const recordedAmount = parseFloat(rawAmount);
   if (isNaN(recordedAmount) || recordedAmount < 0) {
     const err = new Error('Payment amount must be a valid non-negative number.');
     err.statusCode = 400;
@@ -493,7 +515,29 @@ export async function renewBusinessSubscription({
     manualAdjustmentNote = ` [Manual Adjustment: Expected ${expectedAmount.toLocaleString()}, Recorded ${recordedAmount.toLocaleString()}]`;
   }
 
-  // 4. Calculate period start and end dates (preserving remaining active days)
+  // 4. Normalize payment method enum & preserve original in notes
+  const rawMethod = payment_method || paymentMethod || 'CASH';
+  let normalizedPaymentMethod = 'OTHER';
+  const upper = (rawMethod || '').toUpperCase();
+  if (upper.includes('CASH') || upper === 'CASH') {
+    normalizedPaymentMethod = 'CASH';
+  } else if (upper.includes('BANK') || upper.includes('CRDB') || upper.includes('NMB') || upper.includes('TRANSFER')) {
+    normalizedPaymentMethod = 'BANK_TRANSFER';
+  } else if (upper.includes('MPESA') || upper.includes('M-PESA') || upper.includes('AIRTEL') || upper.includes('TIGO') || upper.includes('HALOPESA') || upper.includes('MOBILE')) {
+    normalizedPaymentMethod = 'MOBILE_MONEY';
+  } else if (['CASH', 'BANK_TRANSFER', 'MOBILE_MONEY', 'OTHER'].includes(upper)) {
+    normalizedPaymentMethod = upper;
+  }
+
+  const effectiveRef = payment_reference || paymentReference || '';
+  const effectiveNotes = notes || '';
+  const combinedNotes = [
+    rawMethod && rawMethod !== normalizedPaymentMethod ? `Channel: ${rawMethod}` : null,
+    effectiveNotes.trim() ? effectiveNotes.trim() : null,
+    manualAdjustmentNote.trim() ? manualAdjustmentNote.trim() : null
+  ].filter(Boolean).join(' | ');
+
+  // 5. Calculate period start and end dates (preserving remaining active days)
   const { periodStart, periodEnd } = calculateRenewalDates({
     currentEndDate: business.subscription_end_date,
     billingCycle: plan.billing_cycle,
@@ -503,7 +547,14 @@ export async function renewBusinessSubscription({
   const formattedStart = periodStart.toISOString().slice(0, 19).replace('T', ' ');
   const formattedEnd = periodEnd.toISOString().slice(0, 19).replace('T', ' ');
 
-  // 5. Atomic ACID execution
+  // Keep original subscription_start_date if currently active, or update to now if new/expired
+  const now = new Date();
+  const wasActive = business.subscription_end_date && new Date(business.subscription_end_date).getTime() > now.getTime();
+  const businessStartDate = wasActive && business.subscription_start_date 
+    ? new Date(business.subscription_start_date).toISOString().slice(0, 19).replace('T', ' ')
+    : now.toISOString().slice(0, 19).replace('T', ' ');
+
+  // 6. Atomic ACID execution
   await executeTransaction(async (conn) => {
     // A. Insert payment ledger record
     await conn.query(`
@@ -514,12 +565,12 @@ export async function renewBusinessSubscription({
       parsedBusinessId,
       parsedPlanId,
       recordedAmount,
-      paymentMethod,
-      paymentReference ? paymentReference.trim() : null,
+      normalizedPaymentMethod,
+      effectiveRef ? effectiveRef.trim() : null,
       formattedStart,
       formattedEnd,
       currentUser ? currentUser.id : 1,
-      `${notes.trim()}${manualAdjustmentNote}`.trim() || null
+      combinedNotes || null
     ]);
 
     // B. Update business subscription fields and activate
@@ -534,7 +585,7 @@ export async function renewBusinessSubscription({
       WHERE id = ?
     `, [
       parsedPlanId,
-      formattedStart,
+      businessStartDate,
       formattedEnd,
       parsedBusinessId
     ]);

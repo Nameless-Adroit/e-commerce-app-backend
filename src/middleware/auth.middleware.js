@@ -113,11 +113,16 @@ export async function authenticateToken(req, res, next) {
           );
         }
 
-        // Allow reading own subscription info, profile, or logging out when expired
-        const isAllowedWhenExpired = 
-          req.originalUrl?.includes('/subscriptions/my') || 
+        // Allow reading own subscription info, billing, payment methods, profile, renewal submission, or logging out when expired
+        const isSubscriptionRoute = 
+          req.originalUrl?.includes('/subscriptions') || 
+          req.originalUrl?.includes('/platform/config') ||
+          req.originalUrl?.includes('/platform/payment-methods');
+        const isAuthRoute = 
           req.originalUrl?.includes('/auth/logout') ||
-          req.originalUrl?.includes('/auth/profile');
+          req.originalUrl?.includes('/auth/profile') ||
+          req.originalUrl?.includes('/auth/refresh');
+        const isAllowedWhenExpired = isSubscriptionRoute || isAuthRoute;
 
         if (!isAllowedWhenExpired) {
           return res.status(403).json({
@@ -128,7 +133,14 @@ export async function authenticateToken(req, res, next) {
         }
       }
 
-      if (user.business_status === BUSINESS_STATUS.SUSPENDED || user.subscription_status === 'cancelled') {
+      const isExemptRoute = 
+        req.originalUrl?.includes('/subscriptions') || 
+        req.originalUrl?.includes('/platform/config') ||
+        req.originalUrl?.includes('/platform/payment-methods') ||
+        req.originalUrl?.includes('/auth/logout') ||
+        req.originalUrl?.includes('/auth/profile');
+
+      if (!isExemptRoute && (user.business_status === BUSINESS_STATUS.SUSPENDED || user.subscription_status === 'cancelled')) {
         return res.status(403).json({
           success: false,
           code: 'BUSINESS_SUSPENDED',
